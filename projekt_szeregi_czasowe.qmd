@@ -1,0 +1,916 @@
+---
+title: "Projekt Szeregi Czasowe"
+author: "Diana Morzhak, Mateusz Walo, Dominika Zydorczyk"
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-summary: "Pokaż/Ukryj kod"
+    code-tools: false
+    self-contained: true
+    toc: true
+execute:
+  echo: true        
+  warning: false    
+  message: false     
+  error: false        
+editor: visual
+---
+
+# Cel i zarys projektu
+
+Celem niniejszego projektu jest przeanalizowaine danych dotyczących miesięcznej ceny takich metali szlachetnych jak złoto, miedź oraz srebro wyrażonej w dolarach amerykańskich w okresie lat 2005 - 2025 za 1 uncję takiego metalu. Okres ten obejmuje 20 lat które gospodarczo i ekonomicznie miały bardzo wiele wydarzeń które miały wpływ na wachanie się ceny tego jakże cennego surowca. W ciągu tych 20 lat mieliśmy doczynienia z pandemią COVID-19, wybuchem wojny na Ukrainie oraz ekspansją rozwoju sztucznej inteligencji, bardzo ciekawe czasu :)
+
+Dlaczego akurat metale szlachetne? Jest to surowiec który wykorzystywano jeszcze zanim powstała waluta dolara amerykańskiego, i ten surowiec jest niezwykle ważny dla globalnej gospodarki.
+
+Dane dotyczące złota zostały pobrane przez API Pythonowe z witryny <https://freegoldapi.com/data/latest.csv> i odpowiednio sformatowane tak aby plik z danymi nadawał sie do daleszej analizy, skrypty pythonowe użyte do pobrania i obróbki danych znajdują się w repozytorium w folderze `utils/`
+
+Opis jak pobrane zostały dane miedzi
+
+Opis jak zostały pobrane dane o srebrze // analogicznie do tego co napisałem o złocie
+
+```{r}
+install.packages(c(
+  "tidyverse","lubridate","forecast","tseries","lmtest",
+  "randtests","moments","changepoint","strucchange", "zoo", "patchwork"
+), quiet = TRUE)
+
+library(tidyverse)
+library(zoo)
+library(lubridate)
+library(forecast)
+library(tseries)
+library(lmtest)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(scales)
+library(patchwork)
+library(randtests)   # runs.test
+library(moments)     # jarque.test
+library(changepoint) # changepoints
+library(strucchange) # testy stabilności
+```
+
+## Przedstawienie danych wszystkich metali
+
+zrobi tą część osoba która będzie robiła swoją część jako ostatnia i tutaj wykresiki wszystkich trzech metali jednocześnie, z zaznaczeniem ważnych dat - covid, wojna etc. to taki dalszy wstep jeszcze przed tym czy wgl zajmiemy się na poważnie szeregami :)
+
+## Analiza szeregu czasowego dla miesięcznej ceny uncji złota
+
+### Pytania badawcze
+
+1.  Czy szereg wykazuje trend lub sezonowość?
+2.  Czy po transformacji (log, różnice) szereg jest stacjonarny?
+3.  Który model (ETS/ARIMA/baseline) daje najlepszą prognozę na 12–24 miesiące?
+4.  Czy w danych występują zmiany strukturalne (np. okolice 2008, 2020)?
+
+```{r}
+# wczytanie i lekka korekta typów danych
+
+gold <- read_csv("data/gold_price_monthly_USD_2005_2025.csv",
+col_types = cols(
+date = col_character(),
+price_usd_per_troy_oz = col_double()
+)) |>
+mutate(date = ym(date)) |>
+arrange(date)
+```
+
+```{r}
+# test czy są jakieś niekompletne dane, lecz ich nie ma, więc nie wymaga to korekty i zakomentowałem 
+#full_dates <- seq(min(gold$date), max(gold$date), by = "1 month")
+#missing_dates <- setdiff(full_dates, gold$date)
+#missing_dates
+
+#sum(is.na(gold$price_usd_per_troy_oz))
+```
+
+```{r}
+# styl wykresów złoty
+
+library(scales)
+
+# Kolory (złoto + neutralne)
+COL_GOLD   <- "#D4AF37"   # klasyczne złoto
+COL_GOLD_D <- "#B8860B"   # ciemniejsze złoto (akcenty)
+COL_BG     <- "#0F0F0F"   # ciemny tytuł/teksty (opcjonalnie)
+COL_GRID   <- "grey85"
+
+theme_gold <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", size = base_size + 4),
+      plot.subtitle = element_text(size = base_size),
+      axis.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = COL_GRID),
+      legend.position = "top",
+      legend.title = element_blank()
+    )
+}
+
+theme_set(theme_gold())
+
+
+```
+
+### EDA: wykres, rozkład, outliery
+
+```{r}
+ggplot(gold, aes(date, price_usd_per_troy_oz)) +
+  geom_line(color = COL_GOLD, linewidth = 1.2) +
+  geom_point(color = COL_GOLD_D, size = 1.2, alpha = 0.35) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Złoto: miesięczna cena (USD/oz), 2005–2025",
+    x = "Rok", y = "USD za uncję trojańską"
+  )
+
+```
+
+```{r}
+ggplot(gold, aes(price_usd_per_troy_oz)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 30, fill = alpha(COL_GOLD, 0.35), color = COL_GOLD, linewidth = 0.8) +
+  geom_density(color = COL_GOLD_D, linewidth = 1.1) +
+  scale_x_continuous(labels = label_dollar(prefix = "$")) +
+  labs(
+    title = "Rozkład cen złota (miesięcznie)",
+    x = "USD/oz", y = "Gęstość"
+  )
+```
+
+```{r}
+gold_eda <- gold |>
+  mutate(
+    log_price = log(price_usd_per_troy_oz),
+    ret = c(NA, diff(log_price))
+  )
+
+ggplot(gold_eda, aes(date, ret)) +
+  geom_hline(yintercept = 0, color = "grey55") +
+  geom_line(color = COL_GOLD, linewidth = 1.0) +
+  geom_point(color = COL_GOLD_D, alpha = 0.35, size = 1.2) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    subtitle = "To jest lepsze do oceny zmienności niż same poziomy cen",
+    x = "Rok", y = "log-return"
+  )
+
+```
+
+```{r}
+gold_heat <- gold |>
+  mutate(
+    year  = year(date),
+    month = factor(month(date), levels = 1:12, labels = month.abb)
+  )
+
+ggplot(gold_heat, aes(month, factor(year), fill = price_usd_per_troy_oz)) +
+  geom_tile(color = "white", linewidth = 0.2) +
+  scale_fill_gradient(low = "white", high = COL_GOLD) +
+  labs(
+    title = "Heatmapa cen: miesiąc vs rok",
+    x = "Miesiąc", y = "Rok"
+  )
+
+```
+
+### Trend: aproksymacja wielomianowa + wybór stopnia
+
+#### Wybór stopnia wielomianu
+
+```{r}
+t <- 1:nrow(gold)
+aic_vec <- c()
+
+for (deg in 1:12) {
+  mod <- lm(price_usd_per_troy_oz ~ poly(t, degree = deg), data = gold)
+  aic_vec <- c(aic_vec, AIC(mod))
+}
+
+best_deg <- which.min(aic_vec)
+
+aic_df <- tibble(
+  degree = 1:12,
+  AIC = aic_vec,
+  is_best = degree == best_deg
+)
+
+ggplot(aic_df, aes(degree, AIC)) +
+  geom_line(color = COL_GOLD, linewidth = 1.1) +
+  geom_point(aes(fill = is_best),
+             shape = 21, size = 3.2, color = COL_GOLD_D, stroke = 1.0) +
+  scale_fill_manual(values = c(`FALSE` = "white", `TRUE` = COL_GOLD)) +
+  geom_vline(xintercept = best_deg, linetype = "dashed", color = COL_GOLD_D) +
+  scale_x_continuous(breaks = 1:12) +
+  labs(
+    title = "Dobór stopnia wielomianu trendu (AIC)",
+    x = "Stopień wielomianu",
+    y = "AIC (im mniejsze, tym lepiej)"
+  ) +
+  theme_gold()
+
+```
+
+#### Dopasowanie trendu do reszty
+
+```{r}
+trend_mod <- lm(price_usd_per_troy_oz ~ poly(t, degree = best_deg), data = gold)
+gold$trend_fit <- fitted(trend_mod)
+gold$resid_trend <- resid(trend_mod)
+```
+
+```{r}
+ggplot(gold, aes(date)) +
+  # dane (cena)
+  geom_line(aes(y = price_usd_per_troy_oz),
+            color = COL_GOLD, linewidth = 1.15, alpha = 0.9) +
+  geom_point(aes(y = price_usd_per_troy_oz),
+             color = COL_GOLD, size = 1.2, alpha = 0.25) +
+
+  # trend wielomianowy
+  geom_line(aes(y = trend_fit),
+            color = COL_GOLD_D, linewidth = 1.4) +
+
+  # opcjonalnie: wstęga "informacyjna" (nie CI, tylko wizualny akcent)
+  # geom_line(aes(y = trend_fit), color = COL_GOLD_D, linewidth = 1.4) +
+
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$"))+
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = paste0("Trend wielomianowy (stopień ", best_deg, ")"),
+
+    x = "Rok",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_gold()
+
+```
+
+### Wygładzanie: MA i EWMA
+
+```{r}
+# --- MA(12) i EWMA ---
+gold <- gold %>%
+  arrange(date)
+
+# Ruchoma średnia 12-miesięczna (centrowana)
+gold$ma12 <- as.numeric(stats::filter(
+  gold$price_usd_per_troy_oz,
+  rep(1/12, 12),
+  sides = 2
+))
+
+# EWMA
+ewma <- function(x, lambda = 0.2) {
+  y <- numeric(length(x))
+  y[1] <- x[1]
+  for (i in 2:length(x)) y[i] <- lambda * x[i] + (1 - lambda) * y[i - 1]
+  y
+}
+gold$ewma <- ewma(gold$price_usd_per_troy_oz, lambda = 0.2)
+
+# Dane do ggplot w formacie long (ładna legenda)
+smooth_long <- gold %>%
+  select(date, price_usd_per_troy_oz, ma12, ewma) %>%
+  pivot_longer(
+    cols = c(price_usd_per_troy_oz, ma12, ewma),
+    names_to = "series",
+    values_to = "value"
+  ) %>%
+  mutate(
+    series = recode(series,
+      price_usd_per_troy_oz = "Cena (miesięczna)",
+      ma12 = "MA(12) – średnia krocząca",
+      ewma = "EWMA (λ = 0.2)"
+    )
+  )
+
+# Wykres
+ggplot(smooth_long, aes(x = date, y = value, color = series, linetype = series)) +
+  geom_line(linewidth = 1.15, na.rm = TRUE) +
+  scale_color_manual(values = c(
+    "Cena (miesięczna)" = COL_GOLD,
+    "MA(12) – średnia krocząca" = "grey35",
+    "EWMA (λ = 0.2)" = COL_GOLD_D
+  )) +
+  scale_linetype_manual(values = c(
+    "Cena (miesięczna)" = "solid",
+    "MA(12) – średnia krocząca" = "dashed",
+    "EWMA (λ = 0.2)" = "dotdash"
+  )) +
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Wygładzanie: MA(12) i EWMA",
+    x = "Rok",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_gold() +
+  theme(
+    legend.position = "top",
+    legend.key.width = unit(2.2, "lines")
+  )
+
+```
+
+### Stacjonarność i transformacje
+
+#### Logarytmowanie i różnicowanie
+
+```{r}
+# Transformacje: log oraz różnica log (log-zwroty przybliżone)
+gold <- gold %>%
+  arrange(date) %>%
+  mutate(
+    log_price  = log(price_usd_per_troy_oz),
+    dlog_price = c(NA, diff(log_price))
+  )
+
+# Dane w formacie long do wspólnego rysowania
+trans_long <- gold %>%
+  select(date, log_price, dlog_price) %>%
+  pivot_longer(cols = c(log_price, dlog_price),
+               names_to = "series", values_to = "value") %>%
+  mutate(
+    series = recode(series,
+      log_price = "log(cena)",
+      dlog_price = "diff(log(cena))"
+    )
+  )
+
+ggplot(trans_long, aes(x = date, y = value)) +
+  geom_hline(
+    data = trans_long %>% filter(series == "diff(log(cena))"),
+    aes(yintercept = 0),
+    color = "grey55", linewidth = 0.7
+  ) +
+  geom_line(color = COL_GOLD, linewidth = 1.1, na.rm = TRUE) +
+  geom_point(color = COL_GOLD_D, size = 1.0, alpha = 0.25, na.rm = TRUE) +
+  facet_wrap(~ series, ncol = 2, scales = "free_y") +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Transformacje szeregu: log i różnicowanie logarytmu",
+    x = "Rok",
+    y = NULL
+  ) +
+  theme_gold() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    panel.spacing = unit(1.2, "lines")
+  )
+
+```
+
+#### Testy ADF 
+
+```{r}
+adf.test(na.omit(gold$log_price))
+adf.test(na.omit(gold$dlog_price))
+
+kpss.test(na.omit(gold$log_price))
+kpss.test(na.omit(gold$dlog_price))
+```
+
+####  ACF/PACF 
+
+```{r}
+par(mfrow=c(1,2))
+acf(na.omit(gold$dlog_price), main="ACF: diff(log(cena))")
+pacf(na.omit(gold$dlog_price), main="PACF: diff(log(cena))")
+par(mfrow=c(1,1))
+```
+
+### Diagnostyka reszt trendu 
+
+```{r}
+reszty <- gold$resid_trend
+```
+
+#### Losowość
+
+```{r}
+runs.test(na.omit(reszty))
+```
+
+#### Autokorelacja reszt
+
+```{r}
+Box.test(na.omit(reszty), lag=24, type="Ljung-Box")
+```
+
+#### Normalność
+
+```{r}
+shapiro.test(sample(na.omit(reszty), min(5000, length(na.omit(reszty)))))
+jarque.test(na.omit(reszty))
+```
+
+#### Heteroskedastyczność
+
+```{r}
+bptest(reszty ~ t) # Breusch–Pagan
+gqtest(reszty ~ t) # Goldfeld–Quandt
+```
+
+#### ACF/PACF reszt
+
+```{r}
+x <- na.omit(gold$dlog_price)
+p_acf <- ggAcf(x, lag.max = 48) +
+  labs(title = "ACF: diff(log(cena))", x = "Lag", y = "ACF") +
+  theme_gold() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  # podmiana domyślnych kolorów geometrii na złote
+  scale_color_manual(values = c(COL_GOLD)) +
+  scale_fill_manual(values = c(alpha(COL_GOLD, 0.25)))
+
+p_pacf <- ggPacf(x, lag.max = 48) +
+  labs(title = "PACF: diff(log(cena))", x = "Lag", y = "PACF") +
+  theme_gold() +
+  theme(
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  ) +
+  scale_color_manual(values = c(COL_GOLD)) +
+  scale_fill_manual(values = c(alpha(COL_GOLD, 0.25)))
+
+p_acf + p_pacf
+```
+
+### Modelowanie i prognoza 
+
+#### Podział na train/test
+
+Wybieramy ostatnie 12 miesiące jako zbiór testowy modelu
+
+```{r}
+h <- 12
+train <- gold[1:(nrow(gold)-h), ]
+test <- gold[(nrow(gold)-h+1):nrow(gold), ]
+
+y_train <- ts(train$price_usd_per_troy_oz, frequency = 12, start = c(year(min(train$date)), month(min(train$date))))
+y_test <- ts(test$price_usd_per_troy_oz, frequency = 12, start = c(year(min(test$date)), month(min(test$date))))
+```
+
+#### Baseline: naive i drift
+
+```{r}
+fc_naive <- naive(y_train, h = h)
+fc_drift <- rwf(y_train, h = h, drift = TRUE)
+```
+
+```{r}
+accuracy(fc_naive, y_test)
+accuracy(fc_drift, y_test)
+```
+
+#### ETS i ARIMA
+
+```{r}
+fc_ets <- forecast(ets(y_train), h = h)
+
+fit_arima <- auto.arima(y_train, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+fc_arima <- forecast(fit_arima, h = h)
+
+accuracy(fc_ets, y_test)
+accuracy(fc_arima, y_test)
+```
+
+#### Modelowanie za pomocą transformacji Boxa-Coxa
+
+```{r}
+y_train <- ts(train$price_usd_per_troy_oz, frequency=12, start=c(2005,1))
+y_test  <- ts(test$price_usd_per_troy_oz,  frequency=12, start=c(year(min(test$date)), month(min(test$date))))
+
+lambda <- BoxCox.lambda(y_train)
+
+fit_ets_bc   <- ets(y_train, lambda=lambda, biasadj=TRUE)
+fc_ets_bc    <- forecast(fit_ets_bc, h=h)
+
+fit_arima_bc <- auto.arima(y_train, seasonal=TRUE, lambda=lambda,
+                           biasadj=TRUE, stepwise=FALSE, approximation=FALSE)
+fc_arima_bc  <- forecast(fit_arima_bc, h=h)
+
+accuracy(fc_ets_bc, y_test)
+accuracy(fc_arima_bc, y_test)
+```
+
+#### Porównanie metryczne modeli 
+
+```{r}
+y_all <- ts(gold$price_usd_per_troy_oz, frequency = 12, start = c(2005, 1))
+lambda_all <- BoxCox.lambda(y_all)
+
+# Wybór najlepszego modelu na podstawie testu h=12
+
+acc_tbl <- tibble(
+  model = c("NAIVE","DRIFT","ETS","ARIMA","ETS (BoxCox)","ARIMA (BoxCox)"),
+  RMSE  = c(
+    accuracy(fc_naive, y_test)["Test set","RMSE"],
+    accuracy(fc_drift, y_test)["Test set","RMSE"],
+    accuracy(fc_ets,   y_test)["Test set","RMSE"],
+    accuracy(fc_arima, y_test)["Test set","RMSE"],
+    accuracy(fc_ets_bc,   y_test)["Test set","RMSE"],
+    accuracy(fc_arima_bc, y_test)["Test set","RMSE"]
+  ),
+  MAE  = c(
+    accuracy(fc_naive, y_test)["Test set","MAE"],
+    accuracy(fc_drift, y_test)["Test set","MAE"],
+    accuracy(fc_ets,   y_test)["Test set","MAE"],
+    accuracy(fc_arima, y_test)["Test set","MAE"],
+    accuracy(fc_ets_bc,   y_test)["Test set","MAE"],
+    accuracy(fc_arima_bc, y_test)["Test set","MAE"]
+  ),
+  MAPE  = c(
+    accuracy(fc_naive, y_test)["Test set","MAPE"],
+    accuracy(fc_drift, y_test)["Test set","MAPE"],
+    accuracy(fc_ets,   y_test)["Test set","MAPE"],
+    accuracy(fc_arima, y_test)["Test set","MAPE"],
+    accuracy(fc_ets_bc,   y_test)["Test set","MAPE"],
+    accuracy(fc_arima_bc, y_test)["Test set","MAPE"]
+  )
+) %>% arrange(RMSE)
+
+best_model <- acc_tbl$model[1]
+acc_tbl
+
+```
+
+#### Porównanie wizualne modeli
+
+```{r}
+plot_start <- ymd("2020-01-01")
+
+train_end <- max(train$date)
+fc_dates  <- seq(train_end %m+% months(1), by = "1 month", length.out = h)
+
+hist_df <- bind_rows(
+  train %>% transmute(date, value = price_usd_per_troy_oz, part = "Train"),
+  test  %>% transmute(date, value = price_usd_per_troy_oz, part = "Test")
+) %>%
+  filter(date >= plot_start)
+
+
+fc_to_df <- function(fc_obj, model_name){
+  tibble(
+    date = fc_dates,
+    value = as.numeric(fc_obj$mean),
+    model = model_name
+  )
+}
+
+fc_df <- bind_rows(
+  fc_to_df(fc_naive,    "NAIVE"),
+  fc_to_df(fc_drift,    "DRIFT"),
+  fc_to_df(fc_ets,      "ETS"),
+  fc_to_df(fc_arima,    "ARIMA"),
+  fc_to_df(fc_ets_bc,   "ETS (BoxCox)"),
+  fc_to_df(fc_arima_bc, "ARIMA (BoxCox)")
+)
+
+pi_df <- tibble(
+  date = fc_dates,
+  lo80 = as.numeric(fc_arima_bc$lower[,1]),
+  hi80 = as.numeric(fc_arima_bc$upper[,1]),
+  lo95 = as.numeric(fc_arima_bc$lower[,2]),
+  hi95 = as.numeric(fc_arima_bc$upper[,2])
+)
+
+pi_df <- pi_df %>% filter(date >= plot_start)
+fc_df <- fc_df %>% filter(date >= plot_start)
+
+
+model_colors <- c(
+  "NAIVE"          = "grey55",
+  "DRIFT"          = "grey35",
+  "ETS"            = COL_GOLD_D,
+  "ARIMA"          = "#8A6D1D",     # oliwkowo-złoty (spójny, ale odróżnialny)
+  "ETS (BoxCox)"   = "#E6C35C",     # jasne złoto
+  "ARIMA (BoxCox)" = COL_GOLD       # główny złoty
+)
+
+model_linetype <- c(
+  "NAIVE"          = "dotted",
+  "DRIFT"          = "dotdash",
+  "ETS"            = "dashed",
+  "ARIMA"          = "longdash",
+  "ETS (BoxCox)"   = "twodash",
+  "ARIMA (BoxCox)" = "solid"
+)
+
+# --- 6) Wykres ---
+ggplot() +
+  # przedziały (tylko dla wybranego modelu)
+  geom_ribbon(data = pi_df, aes(x = date, ymin = lo95, ymax = hi95),
+              fill = alpha(COL_GOLD, 0.12), color = NA) +
+  geom_ribbon(data = pi_df, aes(x = date, ymin = lo80, ymax = hi80),
+              fill = alpha(COL_GOLD, 0.22), color = NA) +
+
+  # historia: train i test
+  geom_line(data = hist_df %>% filter(part == "Train"),
+            aes(x = date, y = value),
+            color = alpha(COL_GOLD, 0.35), linewidth = 1.0) +
+
+  geom_line(data = hist_df %>% filter(part == "Test"),
+            aes(x = date, y = value),
+            color = COL_GOLD, linewidth = 1.3) +
+  geom_point(data = hist_df %>% filter(part == "Test"),
+             aes(x = date, y = value),
+             color = COL_GOLD_D, size = 1.6, alpha = 0.55) +
+
+  # linia podziału train/test
+  geom_vline(xintercept = train_end, linetype = "dashed", color = "grey45") +
+
+  # prognozy (mean)
+  geom_line(data = fc_df,
+            aes(x = date, y = value, color = model, linetype = model),
+            linewidth = 1.15) +
+
+  scale_color_manual(values = model_colors) +
+  scale_linetype_manual(values = model_linetype) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(limits = c(plot_start, max(fc_dates)), date_breaks = "6 months", date_labels = "%Y-%m")+
+  labs(
+    title = "Porównanie prognoz cen złota (USD/oz)",
+    x = "Rok",
+    y = "USD za uncję trojańską",
+    color = "Model",
+    linetype = "Model"
+  ) +
+  theme_gold() +
+  theme(
+    legend.position = "top",
+    legend.key.width = unit(2.4, "lines"),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+
+### Diagnostyka najlepsego modelu 
+
+#### Diagnostyka reszt
+
+```{r}
+checkresiduals(fc_arima_bc)
+```
+
+### Finalna prognoza 24 miesiące do przodu
+
+```{r}
+h_final <- 24
+
+final_fc <- switch(
+  best_model,
+
+  "NAIVE" = forecast(naive(y_all), h = h_final, level = c(80,95)),
+
+  "DRIFT" = forecast(rwf(y_all, drift = TRUE), h = h_final, level = c(80,95)),
+
+  "ETS" = {
+    fit <- ets(y_all)
+    forecast(fit, h = h_final, level = c(80,95))
+  },
+
+  "ARIMA" = {
+    fit <- auto.arima(y_all, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+    forecast(fit, h = h_final, level = c(80,95))
+  },
+
+  "ETS (BoxCox)" = {
+    fit <- ets(y_all, lambda = lambda_all, biasadj = TRUE)
+    forecast(fit, h = h_final, level = c(80,95))
+  },
+
+  "ARIMA (BoxCox)" = {
+    fit <- auto.arima(y_all, seasonal = TRUE, lambda = lambda_all, biasadj = TRUE,
+                      stepwise = FALSE, approximation = FALSE)
+    forecast(fit, h = h_final, level = c(80,95))
+  }
+)
+
+fc_dates <- seq(max(gold$date) %m+% months(1), by = "1 month", length.out = h_final)
+
+# Tabela do eksportu i wykresu
+fc_plot_df <- tibble(
+  date = fc_dates,
+  mean = as.numeric(final_fc$mean),
+  lo80 = as.numeric(final_fc$lower[,1]),
+  hi80 = as.numeric(final_fc$upper[,1]),
+  lo95 = as.numeric(final_fc$lower[,2]),
+  hi95 = as.numeric(final_fc$upper[,2])
+)
+
+
+```
+
+```{r}
+plot_start <- ymd("2020-01-01")
+
+# historia tylko od 2020
+hist_df_2020 <- gold %>%
+  transmute(date, value = price_usd_per_troy_oz) %>%
+  filter(date >= plot_start)
+
+# zakres osi X: od 2020 do końca prognozy
+x_end <- max(fc_plot_df$date)
+
+ggplot() +
+  # przedziały ufności (za prognozą)
+  geom_ribbon(
+    data = fc_plot_df,
+    aes(x = date, ymin = lo95, ymax = hi95),
+    fill = alpha(COL_GOLD, 0.10),
+    color = NA
+  ) +
+  geom_ribbon(
+    data = fc_plot_df,
+    aes(x = date, ymin = lo80, ymax = hi80),
+    fill = alpha(COL_GOLD, 0.20),
+    color = NA
+  ) +
+
+  # historia (od 2020) - mocniej niż wcześniej, żeby była czytelna
+  geom_line(
+    data = hist_df_2020,
+    aes(x = date, y = value),
+    color = alpha(COL_GOLD, 0.55),
+    linewidth = 1.1
+  ) +
+
+  # prognoza - najbardziej wyraźna
+  geom_line(
+    data = fc_plot_df,
+    aes(x = date, y = mean),
+    color = COL_GOLD,
+    linewidth = 1.5
+  ) +
+  geom_point(
+    data = fc_plot_df,
+    aes(x = date, y = mean),
+    color = COL_GOLD_D,
+    size = 1.8,
+    alpha = 0.75
+  ) +
+
+  # linia podziału: koniec danych historycznych
+  geom_vline(
+    xintercept = max(gold$date),
+    linetype = "dashed",
+    color = "grey45",
+    linewidth = 0.8
+  ) +
+
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(
+    limits = c(plot_start, x_end),
+    date_breaks = "6 months",
+    date_labels = "%Y-%m"
+  ) +
+  labs(
+    title = paste0("Prognoza cen złota — model: ", best_model),
+    x = "Rok-miesiąc",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_gold() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_line(color = "grey90"),
+    panel.grid.minor.x = element_blank()
+  )
+```
+
+```{r}
+write_csv(
+  fc_plot_df,
+  "data/forecast_gold_24m.csv"
+)
+
+```
+
+### Zmiany strukturalne i zmienność
+
+#### Zmiany strukturalne 
+
+```{r}
+cp <- cpt.meanvar(gold$price_usd_per_troy_oz, method = "PELT")
+
+# Indeksy punktów zmiany + daty
+cp_idx <- cpts(cp)
+cp_dates <- gold$date[cp_idx]
+
+plot_start <- ymd("2005-01-01")
+
+gold_cp_df <- gold %>%
+  transmute(date, value = price_usd_per_troy_oz) %>%
+  filter(date >= plot_start)
+
+cp_dates_df <- tibble(date = cp_dates) %>%
+  filter(date >= plot_start)
+
+# 2) Tabelka punktów zmiany (ładna do raportu)
+cp_table <- tibble(
+  changepoint_no = seq_along(cp_dates),
+  date = cp_dates
+)
+
+cp_table
+
+# 3) Wykres w złotej tematyce
+ggplot(gold_cp_df, aes(x = date, y = value)) +
+  geom_line(color = COL_GOLD, linewidth = 1.15, alpha = 0.9) +
+  geom_point(color = COL_GOLD_D, size = 1.1, alpha = 0.25) +
+  geom_vline(
+    data = cp_dates_df,
+    aes(xintercept = date),
+    color = COL_GOLD_D,
+    linetype = "dashed",
+    linewidth = 0.9,
+    alpha = 0.9
+  ) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "6 months", date_labels = "%Y-%m") +
+  labs(
+    title = "Wykrywanie zmian strukturalnych (PELT): średnia i wariancja",
+    subtitle = "Złota linia: cena • Przerywane linie: wykryte punkty zmiany reżimu",
+    x = "Rok-miesiąc",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_gold() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+
+```
+
+```{r}
+ret <- na.omit(diff(log(y_all)))
+
+# Daty dla zwrotów (o 1 krótsze niż y_all)
+ret_dates <- seq(min(gold$date) %m+% months(1), by = "1 month", length.out = length(ret))
+
+ret_df <- tibble(
+  date = ret_dates,
+  ret = as.numeric(ret)
+)
+
+# 1) Wykres log-zwrotów
+p_ret <- ggplot(ret_df, aes(date, ret)) +
+  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.7) +
+  geom_line(color = COL_GOLD, linewidth = 1.1) +
+  geom_point(color = COL_GOLD_D, size = 1.1, alpha = 0.35) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Log-zwroty miesięczne złota",
+    subtitle = "Seria diff(log(cena)) — lepsza do analizy zmienności niż poziomy cen",
+    x = "Rok",
+    y = "log-return"
+  ) +
+  theme_gold()
+
+# 2) ACF kwadratów zwrotów (ARCH effect)
+acf_obj <- acf(ret^2, plot = FALSE, lag.max = 48)
+acf_df <- tibble(
+  lag = as.integer(acf_obj$lag[-1] * frequency(y_all)),  # pomijamy lag=0
+  acf = as.numeric(acf_obj$acf[-1])
+)
+
+# przybliżony próg istotności (dla wizualnej interpretacji)
+conf <- 1.96 / sqrt(length(ret))
+
+p_acf2 <- ggplot(acf_df, aes(lag, acf)) +
+  geom_hline(yintercept = c(-conf, conf), linetype = "dashed", color = "grey55") +
+  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.7) +
+  geom_segment(aes(xend = lag, y = 0, yend = acf),
+               color = COL_GOLD, linewidth = 1.15) +
+  geom_point(color = COL_GOLD_D, size = 1.4, alpha = 0.65) +
+  scale_x_continuous(breaks = seq(0, max(acf_df$lag), by = 6)) +
+  labs(
+    title = "ACF kwadratów log-zwrotów",
+    subtitle = "Istotne opóźnienia sugerują efekt ARCH (klastrowanie zmienności)",
+    x = "Lag (miesiące)",
+    y = "ACF"
+  ) +
+  theme_gold()
+
+# 3) Jeden “panel” w raporcie
+p_ret / p_acf2
+
+```
+
+## Analiza szeregu czasowego dla miesięcznej ceny uncji srebra
+
+## Analiza szeregu czasowego dla miesięcznej ceny uncji miedzi
+
+## Podsumowanie
+
+zrobi to osoba która bedzie swoją część projektu robiła jako ostatnia, summary z rzeczy opisanych przez wszystkie osoby
