@@ -366,7 +366,7 @@ ggplot(trans_long, aes(x = date, y = value)) +
 
 ```
 
-#### Testy ADF 
+#### Testy ADF
 
 ```{r}
 adf.test(na.omit(gold$log_price))
@@ -376,7 +376,7 @@ kpss.test(na.omit(gold$log_price))
 kpss.test(na.omit(gold$dlog_price))
 ```
 
-####  ACF/PACF 
+#### ACF/PACF
 
 ```{r}
 par(mfrow=c(1,2))
@@ -385,7 +385,7 @@ pacf(na.omit(gold$dlog_price), main="PACF: diff(log(cena))")
 par(mfrow=c(1,1))
 ```
 
-### Diagnostyka reszt trendu 
+### Diagnostyka reszt trendu
 
 ```{r}
 reszty <- gold$resid_trend
@@ -445,7 +445,7 @@ p_pacf <- ggPacf(x, lag.max = 48) +
 p_acf + p_pacf
 ```
 
-### Modelowanie i prognoza 
+### Modelowanie i prognoza
 
 #### Podział na train/test
 
@@ -503,7 +503,7 @@ accuracy(fc_ets_bc, y_test)
 accuracy(fc_arima_bc, y_test)
 ```
 
-#### Porównanie metryczne modeli 
+#### Porównanie metryczne modeli
 
 ```{r}
 y_all <- ts(gold$price_usd_per_troy_oz, frequency = 12, start = c(2005, 1))
@@ -654,7 +654,7 @@ ggplot() +
 
 ```
 
-### Diagnostyka najlepsego modelu 
+### Diagnostyka najlepsego modelu
 
 #### Diagnostyka reszt
 
@@ -798,7 +798,7 @@ write_csv(
 
 ### Zmiany strukturalne i zmienność
 
-#### Zmiany strukturalne 
+#### Zmiany strukturalne
 
 ```{r}
 cp <- cpt.meanvar(gold$price_usd_per_troy_oz, method = "PELT")
