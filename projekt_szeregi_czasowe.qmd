@@ -131,6 +131,8 @@ ggplot(gold, aes(date, price_usd_per_troy_oz)) +
 
 ```
 
+Szereg miesięcznych cen złota w USD w latach 2005–2025 wykazuje wyraźny długookresowy trend wzrostowy, ale nie jest to wzrost jednolity w czasie. W danych widać co najmniej kilka faz (reżimów): silny wzrost do okolic 2011–2012, następnie kilkuletnie osłabienie i stabilizacja, ponowny wzrost w latach 2019–2021 oraz bardzo dynamiczne przyspieszenie w końcowej części próby (2024–2025), gdzie ceny osiągają nowe maksima. Zmienność także wydaje się rosnąć wraz z poziomem cen, co sugeruje niestacjonarność szeregu na poziomach i potencjalną potrzebę transformacji (np. logarytmowania) oraz analizy różnic/log-zwrotów. Już na etapie EDA można też podejrzewać występowanie zmian strukturalnych, dlatego w dalszej części projektu oprócz klasycznych modeli (ETS/ARIMA) zostanie sprawdzona stabilność w czasie oraz jakość prognoz na wydzielonym zbiorze testowym.
+
 ```{r}
 ggplot(gold, aes(price_usd_per_troy_oz)) +
   geom_histogram(aes(y = after_stat(density)),
@@ -143,24 +145,7 @@ ggplot(gold, aes(price_usd_per_troy_oz)) +
   )
 ```
 
-```{r}
-gold_eda <- gold |>
-  mutate(
-    log_price = log(price_usd_per_troy_oz),
-    ret = c(NA, diff(log_price))
-  )
-
-ggplot(gold_eda, aes(date, ret)) +
-  geom_hline(yintercept = 0, color = "grey55") +
-  geom_line(color = COL_GOLD, linewidth = 1.0) +
-  geom_point(color = COL_GOLD_D, alpha = 0.35, size = 1.2) +
-  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  labs(
-    subtitle = "To jest lepsze do oceny zmienności niż same poziomy cen",
-    x = "Rok", y = "log-return"
-  )
-
-```
+Rozkład miesięcznych cen złota jest wyraźnie prawostronnie asymetryczny: większość obserwacji koncentruje się w niższych przedziałach cenowych, a długi ogon po prawej stronie wynika z relatywnie krótkiego, ale bardzo wysokiego poziomu cen w końcowej części próby. Taki kształt rozkładu jest typowy dla danych ekonomicznych mierzonych w poziomach i sugeruje, że wariancja może zależeć od poziomu (efekt skali).
 
 ```{r}
 gold_heat <- gold |>
@@ -178,6 +163,8 @@ ggplot(gold_heat, aes(month, factor(year), fill = price_usd_per_troy_oz)) +
   )
 
 ```
+
+Heatmapa cen w układzie miesiąc–rok pozwala jednocześnie ocenić dwa aspekty szeregów czasowych **sezonowość** (wzorce powtarzające się w kolumnach miesięcy) oraz **zmiany poziomu** w czasie (różnice między wierszami lat). W przedstawionych danych nie widać stabilnego, powtarzalnego wzorca miesięcznego - kolory w obrębie pojedynczego roku są zwykle do siebie zbliżone, a ewentualne różnice między miesiącami są małe w porównaniu do zmian między latami. To sugeruje, że klasyczna sezonowość kalendarzowa (miesięczna) jest słaba lub drugorzędna. Jednocześnie wyraźnie widać **zmianę reżimów cenowych**: lata 2005–2007 są relatywnie „jasne”, okres ok. 2010–2012 jest zauważalnie „ciemniejszy”, następnie następuje kilkuletnia stabilizacja na umiarkowanym poziomie, a od okolic 2020 widać przejście do wyraźnie wyższych poziomów, z najsilniejszym przyciemnieniem w latach 2024–2025. Z punktu widzenia modelowania oznacza to, że w danych dominują zmiany poziomu w czasie, a komponent sezonowy – jeśli w ogóle występuje – nie jest kluczowy, co uzasadnia skupienie się na transformacjach/stacjonarności oraz modelach dobrze radzących sobie ze zmianami poziomu.
 
 ### Trend: aproksymacja wielomianowa + wybór stopnia
 
@@ -216,6 +203,8 @@ ggplot(aic_df, aes(degree, AIC)) +
 
 ```
 
+Zgodnie z podejściem wykładowym, stopień wielomianu trendu dobrano na podstawie kryterium informacyjnego Akaikiego **AIC**, które równoważy jakość dopasowania z karą za złożoność modelu. Wraz ze wzrostem stopnia wielomianu AIC systematycznie maleje, co oznacza, że prostsze trendy (stopnie 1–3) nie oddają w pełni nieliniowego charakteru zmian cen w czasie. Minimum AIC uzyskano dla stopnia **11** (zaznaczone na wykresie), dlatego ten wariant przyjęto jako najlepszy kompromis między dopasowaniem a liczbą parametrów w ramach rozważanej rodziny modeli. Jednocześnie spłaszczenie krzywej AIC dla wysokich stopni sugeruje, że poprawa dopasowania po przekroczeniu okolic 7–8 jest już relatywnie niewielka, co w praktyce może oznaczać ryzyko „dopasowania się” do lokalnych wahań. Z tego powodu trend wielomianowy traktujemy przede wszystkim jako narzędzie opisu deterministycznej składowej.
+
 #### Dopasowanie trendu do reszty
 
 ```{r}
@@ -250,6 +239,8 @@ ggplot(gold, aes(date)) +
   theme_gold()
 
 ```
+
+Dopasowana krzywa dobrze oddaje **nieliniowy przebieg długookresowych zmian** (wzrost do ok. 2011–2012, spadek/stabilizacja w kolejnych latach oraz silne przyspieszenie po 2020), traktując krótkookresowe wahania jako składnik losowy/resztowy.”
 
 ### Wygładzanie: MA i EWMA
 
@@ -318,6 +309,18 @@ ggplot(smooth_long, aes(x = date, y = value, color = series, linetype = series))
 
 ```
 
+Na wykresie zastosowano dwie klasyczne metody wygładzania: **MA(12)** oraz **EWMA**.\
+
+**MA(12)** (*Moving Average*, 12-miesięczna średnia ruchoma) polega na zastąpieniu obserwacji średnią z ostatnich (lub – jak tu – z okna obejmującego) **12 miesięcy**, co silnie redukuje wahania krótkookresowe i wydobywa **trend/cykl w skali rocznej**. Skutkiem ubocznym jest **opóźnienie (lag)** względem szeregu – MA reaguje wolniej na nagłe zmiany, bo każda nowa obserwacja wpływa na wynik tylko w 1/12.
+
+**EWMA** (*Exponentially Weighted Moving Average*, wykładniczo ważona średnia ruchoma) nadaje obserwacjom w przeszłości **malejące wykładniczo wagi**. Formalna definicja ma postać
+
+$$
+y_t  = \lambda_{x_t} + (1-\lambda)\cdot y_{t-1}
+$$Parametr $\lambda = 0.2$ oznacza, że bieżąca obserwacja ma 20% wagi, a pozostałe 80% “dziedziczone” jest z poprzedniego wygładzenia. W praktyce EWMA jest **bardziej responsywna** niż MA i szybciej “podąża” za zmianami trendu, jednocześnie tłumiąc szum.
+
+Interpretując wynik: obie krzywe wygładzające potwierdzają nieliniowy przebieg długookresowy – wzrost do ok. 2011–2012, późniejsze osłabienie/stabilizację oraz ponowne przyspieszenie po 2019–2020. W końcowej części próby (ok. 2024–2025) widać gwałtowne zwiększenie tempa wzrostu ceny: **EWMA reaguje na to szybciej**, natomiast **MA(12)** pozostaje bardziej “inercyjna” i wygładza tę zmianę mocniej, przez co jej linia jest bardziej opóźniona. Z punktu widzenia projektu, te metody pełnią rolę opisową: pokazują strukturę trendu i skalę wahań krótkookresowych.W
+
 ### Stacjonarność i transformacje
 
 #### Logarytmowanie i różnicowanie
@@ -366,13 +369,59 @@ ggplot(trans_long, aes(x = date, y = value)) +
 
 ```
 
+<<<<<<< HEAD
 #### Testy ADF
+=======
+Przed budową modeli stochastycznych często stosuje się transformacje, których celem jest **stabilizacja wariancji** i doprowadzenie szeregu do postaci bliższej **stacjonarnej**. W tym celu wykorzystano dwie standardowe operacje:
+
+1.  **Transformacja logarytmiczna** $log⁡(P_t)$ – zmniejsza wpływ skali (duże wartości nie dominują tak silnie jak w poziomach), a w praktyce często stabilizuje rozrzut i ułatwia interpretację zmian w kategoriach względnych.
+
+2.  **Różnicowanie logarytmu** $\Delta log(P_t) = log(P_t) - log(P_{t-1})$ usuwa trend deterministyczny/stochastyczny i w przybliżeniu odpowiada **procentowej stopie zwrotu** (log-zwrotowi). To jedna z najczęściej stosowanych transformacji w analizie finansowej i klasycznym modelowaniu ARIMA, gdy poziomy cen wykazują niestacjonarność.
+
+Interpretacja wykresu:
+
+panel z **log(cena)** nadal pokazuje długookresowy wzorzec (wzrost do ok. 2011–2012, spadek/stabilizacja, a następnie silne przyspieszenie w końcówce próby), czyli sama transformacja logarytmiczna **nie usuwa trendu**, tylko zmienia skalę i “uspokaja” względne różnice.
+
+Natomiast panel z **diff(log(cena))** oscyluje wokół zera i nie wykazuje trwałego trendu, co sugeruje, że różnicowanie logarytmu skutecznie eliminuje komponent długookresowy i daje serię bardziej odpowiednią do dalszych testów stacjonarności oraz identyfikacji struktury zależności (ACF/PACF). Jednocześnie widoczne są okresy większej i mniejszej amplitudy wahań, co wskazuje na zmienność zmieniającą się w czasie.
+
+#### Testy ADF
+
+**ADF - Augmented Dickey - Fuller test**
+
+Test ADF służy do sprawdzania, czy szereg ma **pierwiastek jednostkowy**, czyli czy jest **niestacjonarny** w sensie klasycznym (np. zachowuje się jak random walk z trendem).„Augmented” oznacza, że do równania dodaje się opóźnienia (lag order), by usunąć autokorelację reszt.
+
+-   **Hipoteza zerowa** $H_0$**:** szereg jest **niestacjonarny** (ma pierwiastek jednostkowy).
+
+-   **Hipoteza alternatywna** $H_1$ **:** szereg jest **stacjonarny**.
+
+**KPSS - Kwiatkowski - Phillips - Schmidt - Shin**
+
+KPSS jest komplementarny do ADF: sprawdza stacjonarność „od drugiej strony”.
+
+-   **Hipoteza zerowa H0:** szereg jest **stacjonarny**
+
+-   **Hipoteza alternatywna H1:** szereg jest **niestacjonarny**.
+>>>>>>> d65a931 (wnioski i reformat zlota)
 
 ```{r}
 adf.test(na.omit(gold$log_price))
-adf.test(na.omit(gold$dlog_price))
+```
 
+**Wniosek:** p-value jest bardzo duże, więc **nie mamy podstaw aby odrzucić** $H_0$ . To oznacza, że **log(cena)** nadal zachowuje się jak szereg **niestacjonarny** (ma trend / składową losową typu random walk). Sama transformacja logarytmiczna stabilizuje skalę, ale **nie usuwa niestacjonarności poziomów**.
+
+```{r}
+adf.test(na.omit(gold$dlog_price))
+```
+
+**Wniosek:** p-value jest bardzo małe, więc **odrzucamy** $H_0$ Oznacza to, że **różnice logarytmów (log-zwroty)** są **stacjonarne** (przynajmniej w sensie ADF). To klasyczny rezultat dla danych finansowych: poziomy są niestacjonarne, a przyrosty/log-zwroty są bliższe stacjonarności.
+
+```{r}
 kpss.test(na.omit(gold$log_price))
+```
+
+**Wniosek:** p-value jest małe, więc **odrzucamy H0 o stacjonarności poziomu**. Czyli KPSS potwierdza, że **log(cena) jest niestacjonarna**. Wskazuje na spójność z ADF na `log_price` oba testy wskazują **niestacjonarność**.
+
+```{r}
 kpss.test(na.omit(gold$dlog_price))
 ```
 
@@ -397,11 +446,17 @@ reszty <- gold$resid_trend
 runs.test(na.omit(reszty))
 ```
 
+Test serii (Runs Test) sprawdza, czy znaki reszt pojawiają się w sposób losowy (H0: losowość). Otrzymano **p-value \< 2.2e−16**, więc zdecydowanie **odrzucamy hipotezę o losowości**.
+
+Wniosek: reszty po odjęciu trendu wielomianowego wykazują **uporządkowanie/strukturę**, co sugeruje, że sam trend deterministyczny nie opisuje w pełni dynamiki szeregu i w danych pozostają zależności czasowe wymagające modelowania stochastycznego.
+
 #### Autokorelacja reszt
 
 ```{r}
 Box.test(na.omit(reszty), lag=24, type="Ljung-Box")
 ```
+
+Test Boxa–Ljunka weryfikuje hipotezę H0, że reszty są **nieautokorelacyjne** (biały szum) do zadanego rzędu opóźnień (tu: 24). Ponieważ **p-value \< 2.2e−16**, zdecydowanie **odrzucamy H0**. Oznacza to, że w resztach po usunięciu trendu nadal występuje istotna **autokorelacja**, więc trend wielomianowy nie wystarcza – potrzebny jest model uwzględniający zależności czasowe albo dodatkowe składowe strukturalne.
 
 #### Normalność
 
@@ -410,6 +465,8 @@ shapiro.test(sample(na.omit(reszty), min(5000, length(na.omit(reszty)))))
 jarque.test(na.omit(reszty))
 ```
 
+Oba testy badają zgodność rozkładu reszt z rozkładem normalnym (H0: normalność). Dla Shapiro–Wilka otrzymano **p-value = 0.214**, a dla Jarque–Bera **p-value = 0.228**, więc w obu przypadkach **brak podstaw do odrzucenia normalności** reszt na typowych poziomach istotności. W praktyce oznacza to, że kształt rozkładu reszt nie odbiega istotnie od normalnego; jednocześnie wcześniejsze testy (Runs i Ljung–Box) pokazują, że problemem reszt nie jest rozkład, tylko **zależności czasowe**, które wymagają modelowania.
+
 #### Heteroskedastyczność
 
 ```{r}
@@ -417,7 +474,8 @@ bptest(reszty ~ t) # Breusch–Pagan
 gqtest(reszty ~ t) # Goldfeld–Quandt
 ```
 
-#### ACF/PACF reszt
+\
+Testy te sprawdzają, czy wariancja reszt jest stała w czasie (H0: homoskedastyczność). W teście **Breuscha–Pagana** otrzymano **p-value = 0.044**, co oznacza odrzucenie H0 na poziomie 0.05 i sugeruje **niejednorodną wariancję** (zmienność reszt zależną od czasu/trendu). Z kolei **Goldfeld–Quandt** daje **p-value = 0.063**, czyli wynik graniczny: na poziomie 0.05 nie odrzucamy H0, ale na 0.1 pojawia się sygnał, że wariancja może rosnąć w późniejszym okresie (zgodnie z hipotezą alternatywną o wzroście wariancji). Łącznie wskazuje to, że w resztach może występować umiarkowana heteroskedastyczność, co uzasadnia transformacje (np. log) i ostrożność w założeniu stałej wariancji przy dalszym modelowaniu.
 
 ```{r}
 x <- na.omit(gold$dlog_price)
@@ -449,7 +507,7 @@ p_acf + p_pacf
 
 #### Podział na train/test
 
-Wybieramy ostatnie 12 miesiące jako zbiór testowy modelu
+W celu obiektywnej oceny jakości prognoz zastosowano podział na **zbiór uczący (train)** i **zbiór testowy (test)** zgodnie z podejściem z wykładu. Ostatnie **12 miesięcy** (h = 12) wydzielono jako test, aby sprawdzić, jak modele radzą sobie z prognozowaniem „w przyszłość” na nieznanych danych. Następnie oba zbiory przekształcono do obiektu typu `ts` sz częstotliwością **12** (dane miesięczne), co umożliwia wykorzystanie metod prognozowania (np. ETS/ARIMA) oraz porównanie prognoz i metryk błędu na jednolitej osi czasu.
 
 ```{r}
 h <- 12
@@ -472,6 +530,20 @@ accuracy(fc_naive, y_test)
 accuracy(fc_drift, y_test)
 ```
 
+Poniżej masz krótki, ale treściwy komentarz „wykładowy”: co to za modele benchmarkowe i co mówią Twoje wyniki.
+
+------------------------------------------------------------------------
+
+Jako punkt odniesienia zastosowano dwa klasyczne modele.
+
+**NAIVE** - (model naiwny) zakłada, że prognoza na wszystkie kolejne okresy jest równa **ostatniej obserwacji** ze zbioru uczącego (odpowiednik random walk bez dryfu).
+
+**DRIFT** - to wariant random walk **z dryfem**, gdzie prognoza oprócz poziomu uwzględnia średnią zmianę w czasie (trend liniowy wynikający z historii). Takie benchmarki są ważne, bo dla szeregów finansowych często trudno je wyraźnie pobić i dopiero porównanie z nimi pokazuje realną wartość bardziej złożonych modeli.
+
+Wyniki na zbiorze testowym (ostatnie 12 miesięcy) wskazują, że oba modele mają duży błąd, ale **DRIFT radzi sobie lepiej niż NAIVE**: RMSE spada z ok. **923** do **855**, a MAE z ok. **792** do **732**. Dodatnie **ME** (ok. **792** dla NAIVE i **732** dla DRIFT) oznacza **systematyczne zaniżanie prognoz** względem rzeczywistych wartości w teście – testowy fragment szeregu znajduje się wyraźnie wyżej niż poziom „wyniesiony” z treningu. MAPE rzędu **\~20–22%** potwierdza, że proste założenia o stałym poziomie (NAIVE) lub stałym tempie wzrostu (DRIFT) nie oddają dobrze dynamiki w ostatnim roku. Te wyniki uzasadniają przejście do modeli adaptacyjnych (ETS/ARIMA) oraz rozważenie transformacji (np. Box–Cox), aby lepiej uchwycić zmianę poziomu i skalę wahań
+
+------------------------------------------------------------------------
+
 #### ETS i ARIMA
 
 ```{r}
@@ -483,6 +555,14 @@ fc_arima <- forecast(fit_arima, h = h)
 accuracy(fc_ets, y_test)
 accuracy(fc_arima, y_test)
 ```
+
+W kolejnym kroku zastosowano dwa podstawowe modele prognostyczne **ETS** oraz **ARIMA**.
+
+Model **ETS** (Error–Trend–Seasonal) opisuje szereg poprzez wygładzanie wykładnicze i dobór struktury błędu, trendu i sezonowości (automatycznie wybieranej na podstawie kryteriów informacyjnych).
+
+Z kolei **ARIMA** (AutoRegressive Integrated Moving Average) modeluje zależności autokorelacyjne, a składnik *Integrated* odpowiada za różnicowanie (w praktyce kompensuje niestacjonarność poziomów); dodatkowo dopuszcza komponent sezonowy.
+
+Na zbiorze testowym oba modele osiągają **bardzo podobne wyniki** i są praktycznie równoważne: dla ETS RMSE ≈ **855.47**, MAE ≈ **731.50**, a dla ARIMA RMSE ≈ **854.56**, MAE ≈ **730.43**. Oznacza to poprawę względem modelu naiwnego i porównywalny poziom do modelu z dryfem (DRIFT), ale bez wyraźnego przełomu jakości. Dodatnie wartości **ME ≈ 730–731** wskazują, że również ETS i ARIMA **systematycznie zaniżają prognozy** w okresie testowym, co sugeruje, że ostatni rok danych ma wyraźnie wyższy poziom niż wynikałoby to z historii w zbiorze uczącym (zmiana reżimu / silny wzrost). W konsekwencji same modele ETS/ARIMA bez dodatkowych zabiegów (np. transformacji Box–Cox, czyszczenia outlierów lub uwzględnienia zmian strukturalnych) nie eliminują problemu biasu w testowym fragmencie szeregu.”
 
 #### Modelowanie za pomocą transformacji Boxa-Coxa
 
@@ -662,6 +742,12 @@ ggplot() +
 checkresiduals(fc_arima_bc)
 ```
 
+Zgodnie z podejściem omawianym na wykładzie, po wyborze najlepszego modelu prognozującego należy sprawdzić, czy jego reszty zachowują się jak **biały szum** – tzn. mają średnią bliską zeru, nie wykazują istotnej autokorelacji i nie zawierają systematycznej struktury, której model nie uchwycił. Funkcja `checkresiduals()` łączy w jednej diagnostyce: wykres reszt w czasie, histogram z przybliżeniem rozkładu oraz ACF reszt, a także wykonuje formalny test Ljunga–Boxa.
+
+W teście **Box–Ljung** otrzymano **p-value = 0.6332** (dla 24 opóźnień), więc **brak podstaw do odrzucenia hipotezy zerowej o braku autokorelacji reszt**. Oznacza to, że model ARIMA(0,1,1) z dryfem skutecznie „wyczyścił” zależności liniowe w danych – reszty można traktować jako w przybliżeniu nieskorelowane, co jest kluczowym warunkiem poprawnej specyfikacji modelu.
+
+Wizualnie (ACF i przebieg reszt) nie widać dominujących, systematycznych wzorców, a rozkład reszt jest zbliżony do symetrycznego, co dodatkowo wspiera wniosek, że model jest dobrze dopasowany do struktury średniej. Ewentualne pojedyncze przekroczenia na ACF mogą pojawiać się losowo przy wielu testowanych opóźnieniach i nie muszą oznaczać problemu, jeśli test globalny (Ljung–Box) nie wskazuje autokorelacji.”
+
 ### Finalna prognoza 24 miesiące do przodu
 
 ```{r}
@@ -775,7 +861,7 @@ ggplot() +
     date_labels = "%Y-%m"
   ) +
   labs(
-    title = paste0("Prognoza cen złota — model: ", best_model),
+    title = paste0("Prognoza cen złota - model: ", best_model),
     x = "Rok-miesiąc",
     y = "USD za uncję trojańską"
   ) +
@@ -795,6 +881,8 @@ write_csv(
 )
 
 ```
+
+Finalna prognoza została wyznaczona modelem **ARIMA z transformacją Box–Cox**, w którym rozrzut rośnie wraz z poziomem cen. Model wskazuje na **kontynuację trendu wzrostowego** w horyzoncie 24 miesięcy, ale jednocześnie przedziały predykcji szybko się rozszerzają, co oznacza rosnącą **niepewność prognozy** wraz z wydłużaniem horyzontu (typowe dla modeli z różnicowaniem/losowym składnikiem trendu). Innymi słowy, ARIMA(BoxCox) sugeruje dalszy wzrost jako scenariusz centralny, lecz dopuszcza szeroki zakres możliwych ścieżek cen w przyszłości.
 
 ### Zmiany strukturalne i zmienność
 
@@ -852,60 +940,14 @@ ggplot(gold_cp_df, aes(x = date, y = value)) +
 
 ```
 
-```{r}
-ret <- na.omit(diff(log(y_all)))
+\
+W tej części zastosowano metodę **PELT** (*Pruned Exact Linear Time*) do wykrywania **zmian strukturalnych** w szeregu – tj. momentów, w których następuje istotna zmiana **średniego poziomu** i/lub **wariancji**. Zgodnie z teorią, obecność takich punktów oznacza, że szereg nie jest jednorodny w całym horyzoncie i można go traktować jako sekwencję kolejnych „reżimów” o innych parametrach.
 
-# Daty dla zwrotów (o 1 krótsze niż y_all)
-ret_dates <- seq(min(gold$date) %m+% months(1), by = "1 month", length.out = length(ret))
+Tabela i pionowe linie na wykresie pokazują daty wykrytych punktów zmiany (m.in. 2005–2007, 2009–2011 oraz kolejne w latach 2013–2016; w dalszej części szeregu analogicznie pojawiają się następne punkty aż do okresu prognozy). Ich rozmieszczenie jest spójne z obserwacją, że cena złota przechodziła przez fazy dynamicznych wzrostów, okresy korekty oraz ponownego przyspieszenia, co przekłada się na zmianę poziomu i zmienności. W praktyce oznacza to, że modele o stałych parametrach dopasowane do całego okresu mogą mieć trudność w dokładnym odwzorowaniu końcowych fragmentów danych (zwłaszcza przy gwałtownych zmianach reżimu), dlatego w projekcie uzasadnione jest: (1) stosowanie transformacji stabilizujących (np. Box–Cox), (2) ocena modeli na wydzielonym zbiorze testowym oraz (3) interpretowanie prognoz z uwzględnieniem rosnącej niepewności w okresach przejściowych.
 
-ret_df <- tibble(
-  date = ret_dates,
-  ret = as.numeric(ret)
-)
+## Podsumowanie analizy złota 
 
-# 1) Wykres log-zwrotów
-p_ret <- ggplot(ret_df, aes(date, ret)) +
-  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.7) +
-  geom_line(color = COL_GOLD, linewidth = 1.1) +
-  geom_point(color = COL_GOLD_D, size = 1.1, alpha = 0.35) +
-  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
-  labs(
-    title = "Log-zwroty miesięczne złota",
-    subtitle = "Seria diff(log(cena)) — lepsza do analizy zmienności niż poziomy cen",
-    x = "Rok",
-    y = "log-return"
-  ) +
-  theme_gold()
-
-# 2) ACF kwadratów zwrotów (ARCH effect)
-acf_obj <- acf(ret^2, plot = FALSE, lag.max = 48)
-acf_df <- tibble(
-  lag = as.integer(acf_obj$lag[-1] * frequency(y_all)),  # pomijamy lag=0
-  acf = as.numeric(acf_obj$acf[-1])
-)
-
-# przybliżony próg istotności (dla wizualnej interpretacji)
-conf <- 1.96 / sqrt(length(ret))
-
-p_acf2 <- ggplot(acf_df, aes(lag, acf)) +
-  geom_hline(yintercept = c(-conf, conf), linetype = "dashed", color = "grey55") +
-  geom_hline(yintercept = 0, color = "grey55", linewidth = 0.7) +
-  geom_segment(aes(xend = lag, y = 0, yend = acf),
-               color = COL_GOLD, linewidth = 1.15) +
-  geom_point(color = COL_GOLD_D, size = 1.4, alpha = 0.65) +
-  scale_x_continuous(breaks = seq(0, max(acf_df$lag), by = 6)) +
-  labs(
-    title = "ACF kwadratów log-zwrotów",
-    subtitle = "Istotne opóźnienia sugerują efekt ARCH (klastrowanie zmienności)",
-    x = "Lag (miesiące)",
-    y = "ACF"
-  ) +
-  theme_gold()
-
-# 3) Jeden “panel” w raporcie
-p_ret / p_acf2
-
-```
+Analiza miesięcznych cen złota wskazuje na **silny, nieliniowy trend długookresowy** oraz wyraźne fazy wzrostów i korekt, natomiast **sezonowość miesięczna jest słaba/drugorzędna** (zmiany między latami dominują nad różnicami między miesiącami). Testy stacjonarności potwierdziły, że **`log(cena)` pozostaje niestacjonarna** (ADF: brak odrzucenia unit root; KPSS: odrzucenie stacjonarności), natomiast **`diff(log(cena))` jest stacjonarna** (ADF: odrzucenie unit root; KPSS: brak odrzucenia stacjonarności), co uzasadnia podejście z różnicowaniem w modelach ARIMA / pracę na log-zwrotach. W porównaniu modeli prognostycznych na zbiorze testowym (h = 12) najlepsze wyniki uzyskał **ARIMA z transformacją Box–Cox** (najniższe RMSE/MAE/MAPE), podczas gdy ETS/ARIMA bez transformacji oraz benchmark DRIFT dawały zbliżone, słabsze rezultaty, a NAIVE był najsłabszy; dlatego ARIMA(BoxCox) przyjęto jako model finalny także do prognozy 24-miesięcznej (z rosnącą niepewnością wraz z horyzontem). Dodatkowo wykryto **zmiany strukturalne** (PELT: średnia i wariancja) – szereg przechodzi przez kolejne reżimy, co tłumaczy trudność prostych modeli w końcówce próby i jest ważnym kontekstem interpretacji prognoz (szczególnie w okolicach dużych przejść reżimowych, np. \~2008 i \~2020).
 
 ## Analiza szeregu czasowego dla miesięcznej ceny uncji srebra
 
