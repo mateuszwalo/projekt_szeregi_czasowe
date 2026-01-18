@@ -1367,6 +1367,15 @@ Ceny surowców często podlegają nagłym zmianom reżimu związanym z kryzysami
 
 ### Model stochastyczny ARIMA
 
+#### Specyfikacja Matematyczna Modelu
+
+W celu modelowania miesięcznych cen srebra zastosowano model klasy ARIMA z transformacją Boxa-Coxa. Proces modelowania przedstawia się następująco:
+
+1.  Ze względu na rosnącą amplitudę wahań ceny wraz ze wzrostem jej poziomu (heteroskedastyczność), zastosowano transformację logarytmiczną ($\lambda = 0$): $$w_t = \ln(P_t)$$ gdzie $P_t$ oznacza surową cenę srebra w momencie $t$.
+2.  Szereg zlogarytmowanych cen wykazywał brak stacjonarności, dlatego zastosowano pierwsze różnicowanie ($d=1$): $$y_t = \Delta w_t = w_t - w_{t-1} = \ln(P_t) - \ln(P_{t-1})$$ Szereg $y_t$ reprezentuje logarytmiczne przyrosty (stopy zwrotu), które są stacjonarne.
+3.  Ostateczna postać modelu dla przyrostów $y_t$ (odpowiadająca modelowi MA(1)) przyjmuje postać: $$y_t = 0.0095 + \varepsilon_t + 0.2870  \varepsilon_{t-1}$$ gdzie: $y_t$ – prognozowany logarytmiczny przyrost ceny w czasie $t$, $\mu=0.0095$ – stała (dryft), reprezentująca średni miesięczny przyrost, $\theta_1=0.287$ – parametr średniej ruchomej, $\varepsilon_t$ – biały szum o rozkładzie normalnym: $\varepsilon_t \sim N(0, 0.004816)$.
+4.  Zgodnie z wynikami diagnostyki i funkcji `autogarch`, przyjęto założenie o homoskedastyczności błędu losowego: $$Var(\varepsilon_t | \mathcal{F}_{t-1}) = \sigma^2$$ Brak istotności parametrów w alternatywnym modelu GARCH(1,1) pozwolił na pominięcie specyfikacji zmiennej wariancji warunkowej.
+
 ```{r}
 y <- diff(log(silver$price_usd_per_troy_oz))
 model <- auto.arima(y, seasonal = FALSE)
@@ -1509,7 +1518,21 @@ print("Dokładność ETS:")
 accuracy(fc_ets, test_set)
 ```
 
-Porównanie modeli ARIMA i ETS na zbiorze testowym wykazało zbliżoną jakość prognoz, przy nieznacznej przewadze modelu ARIMA. W obu przypadkach błędy prognoz rosną wraz z horyzontem, co jest typowe dla rynków o wysokiej niepewności i ograniczonej przewidywalności. Mimo że diagnostyka reszt potwierdza wysoką wiarygodność statystyczną modelu ARIMA(0,0,1), prognoza punktowa znajduje się poniżej ostatnich wartości rynkowych. Wynika to z charakterystyki modeli klasy ARIMA, które w horyzoncie długookresowym wykazują tendencję do powrotu do historycznej średniej stopy wzrostu. Obecne poziomy cen srebra są interpretowane przez model jako silne odchylenie od trendu stochastycznego, co skutkuje konserwatywną predykcją. Wskazuje to na konieczność uwzględnienia wysokiej niepewności rynkowej, co potwierdzają szerokie przedziały ufności prognozy.
+```{r}
+#| include: false
+summary(fit_ets)
+```
+
+Matematyczna definicja wybranego modelu ETS wygląda następująco:
+
+$$y_{t+1} = \ell_t + \varepsilon_{t+1}$$\
+$$\ell_t = 0,9999 y_t + 0,0001 \ell_{t-1}$$
+
+Wartość parametru wygładzania $\alpha \approx 1$ wskazuje, że model ETS przypisuje niemal całą wagę ostatniej obserwacji, co w praktyce upodabnia jego prognozy do modelu błądzenia losowego.
+
+Porównanie modeli ARIMA i ETS na zbiorze testowym wykazało zbliżoną jakość prognoz, przy nieznacznej przewadze modelu ARIMA. W obu przypadkach błędy prognoz rosną wraz z horyzontem, co jest typowe dla rynków o wysokiej niepewności i ograniczonej przewidywalności. Proces kształtowania się cen srebra najlepiej opisuje ARIMA(0,0,1), która dzięki istotnemu parametrowi MA1 (0,2870) identyfikuje krótkookresową pamięć rynkową oraz stały trend wzrostowy (0,95% miesięcznie), wygrywając tym samym z modelem ETS(A,N,N), który ze względu na ekstremalnie wysoką alfę ($\alpha \approx 1$) nie był w stanie wypracować prognozy lepszej niż proste powtórzenie ostatniej znanej ceny
+
+Mimo że diagnostyka reszt potwierdza wysoką wiarygodność statystyczną modelu ARIMA(0,0,1), prognoza punktowa znajduje się poniżej ostatnich wartości rynkowych. Wynika to z charakterystyki modeli klasy ARIMA, które w horyzoncie długookresowym wykazują tendencję do powrotu do historycznej średniej stopy wzrostu (co skutkuje konserwatywną predykcją, skupioną wokół wspomnianego wcześniej średniego dryftu (0,95%)). Obecne poziomy cen srebra są interpretowane przez model jako silne odchylenie od trendu stochastycznego, co skutkuje konserwatywną predykcją. Wskazuje to na konieczność uwzględnienia wysokiej niepewności rynkowej, co potwierdzają szerokie przedziały ufności prognozy.
 
 ### Wnioski
 
@@ -1569,7 +1592,7 @@ theme_copper <- function(base_size = 12) {
 theme_set(theme_copper())
 ```
 
-### EDA: wykres, rozkład, outliery
+### co skutkuje konserwatywną predykcją, skupioną wokół wspomnianego wcześniej średniego dryftu (0,95%)EDA: wykres, rozkład, outliery
 
 Szereg cen miedzi wykazuje inną charakterystykę niż złoto. Miedź jest metalem ściśle przemysłowym, dlatego jej cena silnie reaguje na cykle koniunkturalne, pełniąc rolę barometru globalnej gospodarki.
 
@@ -1991,6 +2014,7 @@ Projekt obejmuje analizę dynamiki cen srebra, miedzi i złota w latach 2005–2
 W ramach modelowania porównano podejścia ARIMA i ETS, a ich jakość oceniono na podstawie diagnostyki reszt (ACF, testy heteroskedastyczności Gldfelda-Quandta i Breuscha-Pagana) oraz miar błędu prognoz (MAPE, RMSE). Analiza zmian strukturalnych (test PELT) potwierdziła występowanie okresowych załamań cenowych, jednak mimo tych zaburzeń model ARIMA(0,1,1) z transformacją Boxa–Coxa okazał się najbardziej oszczędny i stabilny. Uzyskane wyniki wskazują na stopniową stabilizację ryzyka rynkowego w prognozowanym horyzoncie do 2026 roku.
 
 ## Źródła
+
 -   Wang, X., Smith, K. A., & Hyndman, R. J. (2006). Characteristic-based clustering for time series data. *Data Mining and Knowledge Discovery*, *13*(3), 335–364
 
 -   Forecasting: Principles and Practice (2nd edition), Rob J Hyndman and George Athanasopoulos, Monash University, Australia
