@@ -9,6 +9,14 @@ format:
     code-tools: false
     self-contained: true
     toc: true
+  pdf:
+    echo: false
+    fontsize: 10pt
+    geometry: 
+      - top=1.5cm
+      - left=1.5cm
+      - right=1.5cm
+      - bottom=2.5cm
 execute:
   echo: true        
   warning: false    
@@ -30,10 +38,10 @@ Opis jak pobrane zostały dane miedzi
 Opis jak zostały pobrane dane o srebrze // analogicznie do tego co napisałem o złocie
 
 ```{r}
-install.packages(c(
-  "tidyverse","lubridate","forecast","tseries","lmtest",
-  "randtests","moments","changepoint","strucchange", "zoo", "patchwork"
-), quiet = TRUE)
+#install.packages(c(
+#  "tidyverse","lubridate","forecast","tseries","lmtest",
+#  "randtests","moments","changepoint","strucchange", "zoo", "patchwork"
+#), quiet = TRUE)
 
 library(tidyverse)
 library(zoo)
@@ -952,6 +960,471 @@ Analiza miesięcznych cen złota wskazuje na **silny, nieliniowy trend długookr
 ## Analiza szeregu czasowego dla miesięcznej ceny uncji srebra
 
 ## Analiza szeregu czasowego dla miesięcznej ceny uncji miedzi
+
+### Pytania badawcze
+1. Czy szereg wykazuje trend lub sezonowość?
+2. Czy po transformacji (log, różnice) szereg jest stacjonarny?
+3. Który model (ETS/ARIMA/baseline) daje najlepszą prognozę na 12–24 miesiące?
+4. Czy w danych występują zmiany strukturalne?
+
+
+```{r}
+# Wczytanie danych miedzi
+copper <- read_csv("data/copper_price_monthly_USD_2005_2025.csv",
+col_types = cols(
+  date = col_character(),
+  price_usd_per_troy_oz = col_double()
+)) |>
+filter(date <= "2024-12") |>
+mutate(date = ym(date)) |> 
+arrange(date)
+```
+
+```{r}
+# PODZIAŁ: Train = 2005-2023, Test = 2024 (12 miesięcy)
+h <- 12
+train_cu <- copper[1:(nrow(copper)-h), ]
+test_cu  <- copper[(nrow(copper)-h+1):nrow(copper), ]
+
+# Obiekty TS
+y_train_cu <- ts(train_cu$price_usd_per_troy_oz, frequency = 12, start = c(2005, 1))
+y_test_cu  <- ts(test_cu$price_usd_per_troy_oz,  frequency = 12, start = c(2024, 1))
+```
+
+
+```{r}
+# Styl wykresów MIEDZIANY
+COL_COPPER <- "#B87333" 
+COL_COPPER_D <- "#8B4513" 
+COL_BG <- "#0F0F0F"
+COL_GRID <- "grey85"
+
+theme_copper <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", size = base_size + 4, color = "black"), 
+      plot.subtitle = element_text(size = base_size),
+      axis.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = COL_GRID),
+      legend.position = "top",
+      legend.title = element_blank()
+    )
+}
+theme_set(theme_copper())
+```
+
+### EDA: wykres, rozkład, outliery
+Szereg cen miedzi wykazuje inną charakterystykę niż złoto. Miedź jest metalem ściśle przemysłowym, dlatego jej cena silnie reaguje na cykle koniunkturalne, pełniąc rolę barometru globalnej gospodarki.
+
+::: {layout="[40, 60]"}
+```{r}
+ggplot(copper, aes(date, price_usd_per_troy_oz)) +
+  geom_line(color = COL_COPPER, linewidth = 1.2) +
+  geom_point(color = COL_COPPER_D, size = 1.2, alpha = 0.35) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Miedź: miesięczna cena (USD/oz), 2005–2024",
+    x = "Rok", y = "USD za uncję trojańską"
+  )
+```
+W przeciwieństwie do złota, które często rośnie w czasie niepokojów jako "bezpieczna przystań", miedź wykazuje większą zmienność cykliczną, podążając za tempem globalnego wzrostu PKB.
+:::
+**Gwałtowny spadek (2008/2009)**: Reakcja na Globalny Kryzys Finansowy i załamanie popytu inwestycyjnego.
+
+**Trend spadkowy (2011–2016)**: Wynikał ze spowolnienia gospodarczego w Chinach (największego konsumenta miedzi) oraz nadpodaży surowca po okresie inwestycyjnym ("koniec supercyklu surowcowego").
+
+**Szok COVID-19 (2020)**: Krótkotrwałe załamanie, po którym nastąpiło dynamiczne odbicie wywołane stymulacją fiskalną i zaburzeniami łańcuchów dostaw.
+
+**Okres niepewności (2022–obecnie)**: Wybuch wojny w Ukrainie początkowo wywindował ceny (obawy o podaż), jednak w drugiej połowie 2022 roku nastąpiła korekta spowodowana podwyżkami stóp procentowych (walka z inflacją) oraz polityką "Zero-COVID" w Chinach. Obecnie obserwujemy *trend boczny* - rynek balansuje między obawami o recesję a rosnącym popytem ze strony sektora transformacji energetycznej (OZE, samochody elektryczne).
+
+::: {layout="[40, 60]"}
+```{r}
+ggplot(copper, aes(price_usd_per_troy_oz)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 30, fill = alpha(COL_COPPER, 0.35), color = COL_COPPER, linewidth = 0.8) +
+  geom_density(color = COL_COPPER_D, linewidth = 1.1) +
+  scale_x_continuous(labels = label_dollar(prefix = "$")) +
+  labs(
+    title = "Rozkład cen miedzi (miesięcznie)",
+    x = "USD/oz", y = "Gęstość"
+  )
+
+```
+
+Rozkład cen miedzi w badanym okresie jest jednomodalny (posiada jedno główne maksimum), z najsilniejszą koncentracją obserwacji w przedziale 0.20–0.25 USD/oz. Wskazuje to, że mimo licznych wahań koniunkturalnych, rynek miedzi najczęściej dążył do równowagi w tym właśnie zakresie cenowym.
+:::
+W przeciwieństwie do złota, którego rozkład charakteryzował się silną asymetrią prawostronną (długi ogon oznaczający ucieczkę cen w górę), rozkład miedzi jest bardziej symetryczny, lecz szeroki (duża dyspersja). Oznacza to, że miedź jest aktywem o wysokiej zmienności w obie strony – ceny potrafią dynamicznie rosnąć w czasie boomu, ale też głęboko spadać w czasie recesji, rzadko jednak wybijając się trwale na ekstremalnie wysokie poziomy bez późniejszej korekty.
+
+
+::: {layout="[40, 60]" layout-valign="top"}
+```{r}
+copper_heat <- copper |>
+  mutate(
+    year  = year(date),
+    month = factor(month(date), levels = 1:12, labels = month.abb)
+  )
+
+ggplot(copper_heat, aes(month, factor(year), fill = price_usd_per_troy_oz)) +
+  geom_tile(color = "white", linewidth = 0.2) +
+  scale_fill_gradient(low = "white", high = COL_COPPER_D) + # Używamy ciemniejszego dla kontrastu
+  labs(
+    title = "Heatmapa cen miedzi: miesiąc vs rok",
+    x = "Miesiąc", y = "Rok"
+  )
+
+```
+
+Podobnie jak w przypadku złota, mapa ciepła dla miedzi wskazuje na dominację zmian między latami (poziome pasy) nad zmianami wewnątrz roku (sezonowość miesięczna). Wyraźnie widać „ciemne pasy” w latach boomu surowcowego (ok. 2011 oraz po 2020 r.) oraz „jasne obszary” odpowiadające niższym poziomom cenowym: na początku badanego okresu (2005) oraz w latach spowolnienia gospodarczego (koniec 2008/2009, 2015/2016). Brak wyraźnych pionowych pasów sugeruje, że sezonowość kalendarzowa (np. wzrosty zawsze w marcu) jest słabsza niż wpływ globalnych trendów makroekonomicznych.
+::: 
+
+### Dekompozycja szeregu
+
+Przeprowadzono dekompozycję szeregu czasowego metodą STL, wyodrębniając składową trendu, sezonowości oraz reszt.
+
+```{r}
+#| fig-height: 3
+#| fig-align: center
+#s.window="periodic" wymusza stałą sezonowość, co pozwala wyizolować trend
+decomp_cu <- stl(y_train_cu, s.window = "periodic")
+
+# Wykres dekompozycji w Twoich kolorach
+autoplot(decomp_cu) +
+  geom_line(color = COL_COPPER_D) +
+  ggtitle("Dekompozycja cen miedzi (STL)") +
+  theme_copper()
+```
+**Dominacja Trendu i Cyklu:** Głównym czynnikiem kształtującym cenę miedzi jest składowa trendu (panel trend). Nie jest ona liniowa, lecz wykazuje silną cykliczność, z wyraźnymi załamaniami w okresach recesji (2008, 2020). Potwierdza to, że miedź jest surowcem wrażliwym na koniunkturę gospodarczą.
+
+**Marginalna Sezonowość:** Panel seasonal wskazuje na istnienie powtarzalnego wzorca rocznego, jednak jego siła jest znikoma. Analizując szare paski skali, widzimy, że wahania sezonowe mają amplitudę rzędu ~0.008 USD/oz, co stanowi ułamek wartości surowca (ok. 2-3% ceny). Oznacza to, że choć matematycznie można wyodrębnić pewną sezonowość, to ekonomicznie jest ona zagłuszana przez silne zmiany trendu i szoki rynkowe.
+
+
+### Trend: aproksymacja wielomianowa
+Przyjęto maksymalny stopień wielomianu równy 12, analogicznie do analizy złota. Choć kryterium AIC sugeruje dalszy spadek wartości dla wyższych stopni, ograniczenie to wynika z chęci uniknięcia nadmiernego dopasowania oraz braku ekonomicznego uzasadnienia dla stosowania wielomianów tak wysokiego rzędu do opisu cykli surowcowych.
+
+::: {layout="[50, 50]"}
+
+```{r}
+# Wybór stopnia wielomianu (identyczna pętla jak dla złota)
+t <- 1:nrow(copper)
+aic_vec <- c()
+
+for (deg in 1:12) {
+  mod <- lm(price_usd_per_troy_oz ~ poly(t, degree = deg), data = copper)
+  aic_vec <- c(aic_vec, AIC(mod))
+}
+
+best_deg_copper <- which.min(aic_vec)
+
+aic_df <- tibble(
+  degree = 1:12,
+  AIC = aic_vec,
+  is_best = degree == best_deg_copper
+)
+
+ggplot(aic_df, aes(degree, AIC)) +
+  geom_line(color = COL_COPPER, linewidth = 1.1) +
+  geom_point(aes(fill = is_best),
+             shape = 21, size = 3.2, color = COL_COPPER_D, stroke = 1.0) +
+  scale_fill_manual(values = c(`FALSE` = "white", `TRUE` = COL_COPPER)) +
+  geom_vline(xintercept = best_deg_copper, linetype = "dashed", color = COL_COPPER_D) +
+  scale_x_continuous(breaks = 1:12) +
+  labs(
+    title = "Dobór stopnia wielomianu trendu (AIC)",
+    x = "Stopień wielomianu",
+    y = "AIC (im mniejsze, tym lepiej)"
+  ) +
+  theme_copper()
+```
+
+```{r}
+# Wykres AIC 
+trend_mod <- lm(price_usd_per_troy_oz ~ poly(t, degree = best_deg_copper), data = copper)
+copper$trend_fit <- fitted(trend_mod)
+copper$resid_trend <- resid(trend_mod)
+
+ggplot(copper, aes(date)) +
+  geom_line(aes(y = price_usd_per_troy_oz), color = COL_COPPER, linewidth = 1.15, alpha = 0.9) +
+  geom_line(aes(y = trend_fit), color = COL_COPPER_D, linewidth = 1.4) +
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  labs(
+    title = paste0("Trend wielomianowy miedzi (stopień ", best_deg_copper, ")"),
+    x = "Rok", y = "USD za uncję"
+  )
+```
+:::
+
+Mimo zastosowania wielomianu wysokiego stopnia (12), dopasowana krzywa nie oddaje precyzyjnie dynamiki cen miedzi. Przebieg trendu wielomianowego jest z natury zbyt "gładki" i łagodny, przez co model "ścina" ostre punkty zwrotne (głębokie dołki kryzysowe w 2008 i 2020 roku oraz gwałtowne szczyty). Wskazuje to, że sztywna funkcja matematyczna nie jest w stanie w pełni odwzorować złożonej, ostrej cykliczności surowca, co uzasadnia przejście do bardziej elastycznych metod wygładzania (MA, EWMA).
+
+
+### Wygładzanie: MA i EWMA
+Zastosowano dwie metody wygładzania szeregu: prostą średnią ruchomą MA(12) oraz średnią wykładniczą EWMA.
+```{r}
+#zdefiniowana przy złocie już!!!!
+ewma <- function(x, lambda = 0.2) {
+  y <- numeric(length(x))
+  y[1] <- x[1]
+  for (i in 2:length(x)) y[i] <- lambda * x[i] + (1 - lambda) * y[i - 1]
+  y
+}
+```
+
+::: {layout="[40, 60]"}
+
+```{r}
+# --- MA(12) i EWMA ---
+copper <- copper %>% arrange(date)
+
+# Ruchoma średnia 12-miesięczna
+copper$ma12 <- as.numeric(stats::filter(copper$price_usd_per_troy_oz, rep(1/12, 12), sides = 2))
+
+# EWMA (taka sama funkcja jak wyżej, ale dla pewności definiujemy lub używamy z global scope)
+copper$ewma <- ewma(copper$price_usd_per_troy_oz, lambda = 0.2)
+
+smooth_long_cu <- copper %>%
+  select(date, price_usd_per_troy_oz, ma12, ewma) %>%
+  pivot_longer(cols = c(price_usd_per_troy_oz, ma12, ewma), names_to = "series", values_to = "value") %>%
+  mutate(series = recode(series, 
+                         price_usd_per_troy_oz = "Cena", ma12 = "MA(12)", ewma = "EWMA"))
+
+ggplot(smooth_long_cu, aes(x = date, y = value, color = series, linetype = series)) +
+  geom_line(linewidth = 1.0) +
+  scale_color_manual(values = c("Cena" = COL_COPPER, "MA(12)" = "black", "EWMA" = COL_COPPER_D)) +
+  labs(title = "Wygładzanie cen miedzi", x = "Rok", y = "USD/oz")
+
+```
+Analiza wykresu pokazuje, że obie metody radzą sobie z opisem trendu znacznie lepiej niż sztywny model wielomianowy, poprawnie podążając za cyklicznymi zwrotami cen. Warto jednak zauważyć przewagę metody EWMA (linia brązowa), która dzięki mechanizmowi wykładniczych wag szybciej reaguje na gwałtowne zmiany rynkowe (np. odbicie po COVID-19 w 2020 r.) i ściślej przylega do rzeczywistego przebiegu cen. Metoda MA(12) (linia czarna), choć skutecznie eliminuje szum, wykazuje zauważalne opóźnienie (efekt inercji) w punktach zwrotnych, co jest naturalną cechą średnich arytmetycznych o stałych wagach.
+::: 
+
+### Stacjonarność i transformacje
+
+```{r}
+# Transformacje
+copper <- copper %>%
+  arrange(date) %>%
+  mutate(
+    log_price  = log(price_usd_per_troy_oz),
+    dlog_price = c(NA, diff(log_price))
+  )
+
+# Testy ADF
+print("ADF dla log(ceny):")
+print(adf.test(na.omit(copper$log_price)))
+```
+```{r}
+print("ADF dla zwrotów (diff log):")
+print(adf.test(na.omit(copper$dlog_price)))
+```
+
+Wynik testu dla **logarytmu cen** jest niejednoznaczny. P-value wynosi 0.047, co jest wartością graniczną (tuż poniżej progu 0.05). Formalnie sugerowałoby to stacjonarność wokół trendu (trend deterministyczny), jednak wizualna ocena wykresu i charakter danych giełdowych wskazują na niestacjonarność.
+
+Natomiast dla **pierwszych różnic (log-zwrotów)** test daje bardzo silny wynik ($p < 0.01$), co jednoznacznie potwierdza stacjonarność. Dlatego, mimo granicznego wyniku dla poziomów, w dalszym modelowaniu (ARIMA) traktujemy proces jako niestacjonarny (z trendem stochastycznym) i wymagający różnicowania. Oznacza to, że przyszła cena zależy od skumulowanych, losowych szoków rynkowych, a nie tylko od upływu czasu.
+
+
+### Modelowanie i prognoza (Train 2005-2023 / Test 2024) 
+
+```{r}
+# Modele
+fc_naive_cu <- naive(y_train_cu, h = h)
+fc_drift_cu <- rwf(y_train_cu, h = h, drift = TRUE)
+fc_ets_cu   <- forecast(ets(y_train_cu), h = h)
+fit_arima_cu <- auto.arima(y_train_cu, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+fc_arima_cu <- forecast(fit_arima_cu, h = h)
+
+# Box-Cox
+lambda_cu <- BoxCox.lambda(y_train_cu)
+fit_ets_bc_cu   <- ets(y_train_cu, lambda=lambda_cu, biasadj=TRUE)
+fc_ets_bc_cu    <- forecast(fit_ets_bc_cu, h=h)
+
+fit_arima_bc_cu <- auto.arima(y_train_cu, seasonal=TRUE, lambda=lambda_cu, biasadj=TRUE, stepwise=FALSE)
+fc_arima_bc_cu  <- forecast(fit_arima_bc_cu, h=h)
+
+```
+
+#### Porównanie metryczne
+
+::: {layout="[30, 70]"}
+```{r}
+# Tabela błędów (analogiczna do złota)
+acc_tbl_cu <- tibble(
+  model = c("NAIVE","DRIFT","ETS","ARIMA","ETS (BoxCox)","ARIMA (BoxCox)"),
+  RMSE  = c(
+    accuracy(fc_naive_cu, y_test_cu)["Test set","RMSE"],
+    accuracy(fc_drift_cu, y_test_cu)["Test set","RMSE"],
+    accuracy(fc_ets_cu,    y_test_cu)["Test set","RMSE"],
+    accuracy(fc_arima_cu, y_test_cu)["Test set","RMSE"],
+    accuracy(fc_ets_bc_cu,    y_test_cu)["Test set","RMSE"],
+    accuracy(fc_arima_bc_cu, y_test_cu)["Test set","RMSE"]
+  ),
+  MAPE  = c(
+    accuracy(fc_naive_cu, y_test_cu)["Test set","MAPE"],
+    accuracy(fc_drift_cu, y_test_cu)["Test set","MAPE"],
+    accuracy(fc_ets_cu,    y_test_cu)["Test set","MAPE"],
+    accuracy(fc_arima_cu, y_test_cu)["Test set","MAPE"],
+    accuracy(fc_ets_bc_cu,    y_test_cu)["Test set","MAPE"],
+    accuracy(fc_arima_bc_cu, y_test_cu)["Test set","MAPE"]
+  )
+) %>% arrange(RMSE)
+
+best_model_cu <- acc_tbl_cu$model[1]
+acc_tbl_cu
+
+```
+Najlepsze wyniki prognostyczne na zbiorze testowym osiągnął model **ARIMA z transformacją Boxa-Coxa**, uzyskując najniższy błąd RMSE (0.0216) oraz MAPE (5.74%).Wynik ten potwierdza wcześniejsze wnioski z analizy EDA – miedź charakteryzuje się zmienną wariancją (amplituda wahań zależy od poziomu cen), dlatego zastosowanie transformacji stabilizującej (Box-Cox) pozwoliło na lepsze dopasowanie modelu niż w przypadku klasycznej ARIMY czy modeli wykładniczych (ETS). Słabszy wynik modelu NAIVE (ostatnie miejsce) świadczy o tym, że w danych występuje struktura (autokorelacja/trend), którą modele zaawansowane potrafiły wykorzystać.
+
+#### Porównanie wizualne
+
+::: {layout="[40, 60]"}
+
+```{r}
+# Przygotowanie danych do wykresu (kod skopiowany od złota, zmienione zmienne)
+plot_start <- ymd("2020-01-01")
+train_end <- max(train_cu$date)
+fc_dates  <- seq(train_end %m+% months(1), by = "1 month", length.out = h)
+
+# Funkcja pomocnicza
+fc_to_df_cu <- function(fc_obj, model_name){
+  tibble(date = fc_dates, value = as.numeric(fc_obj$mean), model = model_name)
+}
+
+fc_df_cu <- bind_rows(
+  fc_to_df_cu(fc_naive_cu, "NAIVE"),
+  fc_to_df_cu(fc_drift_cu, "DRIFT"),
+  fc_to_df_cu(fc_arima_cu, "ARIMA"),
+  fc_to_df_cu(fc_arima_bc_cu, "ARIMA (BoxCox)")
+)
+
+# Historia
+hist_df_cu <- bind_rows(
+  train_cu %>% transmute(date, value = price_usd_per_troy_oz, part = "Train"),
+  test_cu  %>% transmute(date, value = price_usd_per_troy_oz, part = "Test")
+) %>% filter(date >= plot_start)
+
+# Wykres
+ggplot() +
+  geom_line(data = hist_df_cu, aes(date, value, color = part), linewidth = 1.2) +
+  geom_line(data = fc_df_cu, aes(date, value, linetype = model), color = COL_COPPER_D, linewidth = 1) +
+  scale_color_manual(values = c("Train" = alpha(COL_COPPER, 0.4), "Test" = COL_COPPER)) +
+  labs(title = "Prognozy cen miedzi na rok 2024 (Test)", y = "USD/oz") +
+  theme_copper()
+
+```
+Analiza wizualna ujawnia istotne wyzwanie w prognozowaniu cen surowców. Mimo że model ARIMA (BoxCox) (przerywana linia brązowa) osiągnął najmniejszy błąd średni, jego prognoza ma charakter zachowawczy - wyznacza "ścieżkę środka", wokół której oscyluje rzeczywista cena.
+::: 
+
+Rzeczywisty kurs miedzi w 2024 roku (ciągła linia) wykazał silną zmienność (gwałtowny skok w pierwszej połowie roku i późniejszą korektę), której modele statystyczne oparte na historii nie były w stanie precyzyjnie odwzorować co do kształtu. Jest to zjawisko typowe dla szeregów surowcowych, gdzie lokalne szoki (popytowe/podażowe) odchylają cenę od trendu długoterminowego. Mimo to, niski błąd MAPE (~5.7%) wskazuje, że model poprawnie określił przeciętny poziom cen w badanym okresie.
+
+
+### Finalna prognoza 24 miesiące do przodu
+Prognozę na kolejne 24 miesiące wygenerowano przy użyciu najlepszego modelu: ARIMA z transformacją Boxa-Coxa.
+
+::: {layout="[40, 60]"}
+```{r}
+h_final <- 24
+# Budujemy model na CAŁYM dostępnym zbiorze (do Dec 2024)
+y_all_cu <- ts(copper$price_usd_per_troy_oz, frequency = 12, start = c(2005, 1))
+
+# Wybór modelu (tu wpisz ręcznie najlepszy, np. ARIMA BoxCox, albo użyj switcha jak w złocie)
+# Zakładam, że ARIMA BoxCox jest solidnym wyborem dla miedzi
+lambda_all_cu <- BoxCox.lambda(y_all_cu)
+fit_final_cu <- auto.arima(y_all_cu, seasonal = TRUE, lambda = lambda_all_cu, biasadj = TRUE, stepwise=FALSE)
+final_fc_cu  <- forecast(fit_final_cu, h = h_final, level = c(80,95))
+
+# Wykres finalny
+autoplot(final_fc_cu) +
+  autolayer(final_fc_cu$mean, color = COL_COPPER_D) +
+  labs(title = "Prognoza ceny miedzi (2025-2026)", y = "USD/oz") +
+  theme_copper()
+
+```
+
+**Scenariusz centralny (linia ciągła):** Model przewiduje stabilizację cen na poziomie zbliżonym do obecnego (ok. 0.27–0.28 USD/oz). Płaski przebieg prognozy punktowej wynika z natury procesów stochastycznych typu random walk – najlepszą prognozą przyszłej ceny jest jej ostatnia znana wartość (skorygowana o parametry modelu). Kluczową informacją są bardzo **szerokie przedziały ufności (80% i 95%)**. Rozszerzają się one dynamicznie wraz z upływem czasu, co jest efektem zastosowania transformacji Boxa-Coxa (uwzględniającej zmienną wariancję) oraz historycznie dużej zmienności miedzi.
+:::
+
+Model sugeruje, że choć najbardziej prawdopodobnym scenariuszem jest utrzymanie obecnych poziomów cenowych, rynek miedzi pozostaje obarczony gigantycznym ryzykiem. W perspektywie 2 lat cena z 95-procentowym prawdopodobieństwem może znaleźć się w przedziale od kryzysowych 0.15 USD do rekordowych 0.40 USD. Oznacza to, że przyszłość rynku zależy nie od trendu technicznego, lecz od nadchodzących impulsów fundamentalnych (np. tempo transformacji energetycznej vs. globalna recesja).
+
+
+### Zmiany strukturalne (PELT)
+
+::: {layout="[40, 60]"}
+```{r}
+# 1. Obliczenia modelu PELT
+cp_cu <- cpt.meanvar(copper$price_usd_per_troy_oz, method = "PELT")
+
+# 2. Wyciąganie indeksów i dat zmian
+cp_idx_cu <- cpts(cp_cu)
+cp_dates_cu <- copper$date[cp_idx_cu]
+
+# 3. Przygotowanie danych do wykresu
+# (Filtrujemy od 2005, choć u Ciebie dane i tak są od 2005)
+plot_start <- ymd("2005-01-01")
+
+copper_cp_df <- copper %>%
+  transmute(date, value = price_usd_per_troy_oz) %>%
+  filter(date >= plot_start)
+
+cp_dates_df_cu <- tibble(date = cp_dates_cu) %>%
+  filter(date >= plot_start)
+
+# 4. Tabelka punktów zmiany (do wyświetlenia w raporcie)
+cp_table_cu <- tibble(
+  changepoint_no = seq_along(cp_dates_cu),
+  date = cp_dates_cu
+)
+
+# 5. Wykres w stylu "Copper Theme"
+ggplot(copper_cp_df, aes(x = date, y = value)) +
+  # Linia ceny
+  geom_line(color = COL_COPPER, linewidth = 1.15, alpha = 0.9) +
+  geom_point(color = COL_COPPER_D, size = 1.1, alpha = 0.25) +
+  
+  # Linie pionowe oznaczające zmiany strukturalne
+  geom_vline(
+    data = cp_dates_df_cu,
+    aes(xintercept = date),
+    color = COL_COPPER_D,
+    linetype = "dashed",
+    linewidth = 0.9,
+    alpha = 0.9
+  ) +
+  
+  # Formatowanie osi
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  # Zmieniam podziałkę na 2 lata, żeby daty się nie zlewały przy 20-letnim okresie
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") + 
+  
+  # Opisy
+  labs(
+    title = "Wykrywanie zmian strukturalnych (PELT): 
+    średnia i wariancja",
+    subtitle = "Linia miedziana: cena 
+    Przerywane linie: wykryte punkty zmiany reżimu",
+    x = "Rok",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_copper() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank()
+  )
+```
+
+Metoda PELT (czerwona linia schodkowa) wykryła w szeregu czasowym istotne zmiany strukturalne. Wykres wyraźnie dzieli historię notowań na kilka odrębnych „reżimów”, w których średni poziom cen oraz ich wariancja były różne.
+:::
+
+
+Kluczowe punkty zwrotne wykryte przez algorytm pokrywają się z najważniejszymi wydarzeniami makroekonomicznymi:
+
+-   Gwałtowny spadek: Odpowiada załamaniu podczas Globalnego Kryzysu Finansowego (2008/2009).
+-   Wzrost poziomu: To okres boomu surowcowego i odbicia w Chinach (2011).
+-   Skokowa zmiana w górę: Reakcja rynków na post-pandemiczną stymulację i inflację po roku 2020.
+
+Wynik ten stanowi ostateczne potwierdzenie, że parametry generujące proces cenowy nie są stałe w czasie. Występowanie tak silnych zmian strukturalnych jest koronnym argumentem przeciwko stosowaniu prostych modeli liniowych na całej 20-letniej próbie i w pełni uzasadnia konieczność stosowania modeli adaptacyjnych (takich jak użyta wcześniej ARIMA z transformacją Boxa-Coxa), które potrafią dostosować się do zmieniającej się zmienności rynku.
+
+### Podsumowanie analizy miedzi
+Analiza miesięcznych cen miedzi wskazuje na silną naturę cykliczną surowca (naprzemienne okresy boomu i recesji skorelowane z koniunkturą gospodarczą), przy czym sezonowość miesięczna jest marginalna i ekonomicznie pomijalna w porównaniu do składowej trendu. Testy stacjonarności dały wynik graniczny dla log(cena) (p-value $\approx$ 0.047), jednak ze względu na charakter danych giełdowych oraz jednoznaczny wynik dla `diff(log(cena))` (silne odrzucenie hipotezy o niestacjonarności), szereg modelowano jako proces zintegrowany I(1).W porównaniu modeli prognostycznych na zbiorze testowym (h = 12, rok 2024) najlepsze wyniki uzyskał model ARIMA z transformacją Box–Cox (najniższe RMSE i MAPE). Zastosowanie tej transformacji było kluczowe ze względu na zmienną wariancję (amplituda wahań rośnie wraz z poziomem cen). Model ten pokonał proste benchmarki (NAIVE, DRIFT), co potwierdza istnienie struktury zależności możliwej do prognozowania, mimo trudnego rynku w 2024 roku. Finalna prognoza 24-miesięczna wskazuje na stabilizację poziomu cen (zachowawczy charakter modelu), ale obarczona jest **ogromną niepewnością** (bardzo szerokie przedziały ufności). Analiza zmian strukturalnych (PELT) potwierdziła występowanie **odrębnych reżimów zmienności**, pokrywających się z kluczowymi szokami makroekonomicznymi (2008, 2011, 2020), co tłumaczy wyższość metod adaptacyjnych (EWMA, ARIMA) nad sztywnymi trendami deterministycznymi.
+
 
 ## Podsumowanie
 
