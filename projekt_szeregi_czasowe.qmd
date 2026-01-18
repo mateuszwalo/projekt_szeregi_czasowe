@@ -33,9 +33,9 @@ Dlaczego akurat metale szlachetne? Jest to surowiec który wykorzystywano jeszcz
 
 Dane dotyczące złota zostały pobrane przez API Pythonowe z witryny <https://freegoldapi.com/data/latest.csv> i odpowiednio sformatowane tak aby plik z danymi nadawał sie do daleszej analizy, skrypty pythonowe użyte do pobrania i obróbki danych znajdują się w repozytorium w folderze `utils/`
 
-Opis jak pobrane zostały dane miedzi
+Dane o cenach srebra zostały pobrane z serwisu stooq.pl w postaci dziennych notowań USD/oz. Po konwersji dat do formatu czasowego oraz cen do typu numerycznego dane zostały zagregowane do średnich miesięcznych, a następnie ograniczone do okresu 2005–2025.
 
-Opis jak zostały pobrane dane o srebrze // analogicznie do tego co napisałem o złocie
+Dane o cenach miedzi natomiast pochodzą z bazy FRED (Federal Reserve Economic Data) i zostały pobrane już w ujęciu miesięcznym. Ceny wyrażone pierwotnie w USD za tonę metryczną zostały przeliczone na USD za uncję trojańską, aby zachować spójność jednostek z pozostałymi danymi.
 
 ```{r}
 #install.packages(c(
@@ -377,9 +377,8 @@ ggplot(trans_long, aes(x = date, y = value)) +
 
 ```
 
-<<<<<<< HEAD
 #### Testy ADF
-=======
+
 Przed budową modeli stochastycznych często stosuje się transformacje, których celem jest **stabilizacja wariancji** i doprowadzenie szeregu do postaci bliższej **stacjonarnej**. W tym celu wykorzystano dwie standardowe operacje:
 
 1.  **Transformacja logarytmiczna** $log⁡(P_t)$ – zmniejsza wpływ skali (duże wartości nie dominują tak silnie jak w poziomach), a w praktyce często stabilizuje rozrzut i ułatwia interpretację zmian w kategoriach względnych.
@@ -409,7 +408,6 @@ KPSS jest komplementarny do ADF: sprawdza stacjonarność „od drugiej strony�
 -   **Hipoteza zerowa H0:** szereg jest **stacjonarny**
 
 -   **Hipoteza alternatywna H1:** szereg jest **niestacjonarny**.
->>>>>>> d65a931 (wnioski i reformat zlota)
 
 ```{r}
 adf.test(na.omit(gold$log_price))
@@ -953,20 +951,578 @@ W tej części zastosowano metodę **PELT** (*Pruned Exact Linear Time*) do wykr
 
 Tabela i pionowe linie na wykresie pokazują daty wykrytych punktów zmiany (m.in. 2005–2007, 2009–2011 oraz kolejne w latach 2013–2016; w dalszej części szeregu analogicznie pojawiają się następne punkty aż do okresu prognozy). Ich rozmieszczenie jest spójne z obserwacją, że cena złota przechodziła przez fazy dynamicznych wzrostów, okresy korekty oraz ponownego przyspieszenia, co przekłada się na zmianę poziomu i zmienności. W praktyce oznacza to, że modele o stałych parametrach dopasowane do całego okresu mogą mieć trudność w dokładnym odwzorowaniu końcowych fragmentów danych (zwłaszcza przy gwałtownych zmianach reżimu), dlatego w projekcie uzasadnione jest: (1) stosowanie transformacji stabilizujących (np. Box–Cox), (2) ocena modeli na wydzielonym zbiorze testowym oraz (3) interpretowanie prognoz z uwzględnieniem rosnącej niepewności w okresach przejściowych.
 
-## Podsumowanie analizy złota 
+## Podsumowanie analizy złota
 
 Analiza miesięcznych cen złota wskazuje na **silny, nieliniowy trend długookresowy** oraz wyraźne fazy wzrostów i korekt, natomiast **sezonowość miesięczna jest słaba/drugorzędna** (zmiany między latami dominują nad różnicami między miesiącami). Testy stacjonarności potwierdziły, że **`log(cena)` pozostaje niestacjonarna** (ADF: brak odrzucenia unit root; KPSS: odrzucenie stacjonarności), natomiast **`diff(log(cena))` jest stacjonarna** (ADF: odrzucenie unit root; KPSS: brak odrzucenia stacjonarności), co uzasadnia podejście z różnicowaniem w modelach ARIMA / pracę na log-zwrotach. W porównaniu modeli prognostycznych na zbiorze testowym (h = 12) najlepsze wyniki uzyskał **ARIMA z transformacją Box–Cox** (najniższe RMSE/MAE/MAPE), podczas gdy ETS/ARIMA bez transformacji oraz benchmark DRIFT dawały zbliżone, słabsze rezultaty, a NAIVE był najsłabszy; dlatego ARIMA(BoxCox) przyjęto jako model finalny także do prognozy 24-miesięcznej (z rosnącą niepewnością wraz z horyzontem). Dodatkowo wykryto **zmiany strukturalne** (PELT: średnia i wariancja) – szereg przechodzi przez kolejne reżimy, co tłumaczy trudność prostych modeli w końcówce próby i jest ważnym kontekstem interpretacji prognoz (szczególnie w okolicach dużych przejść reżimowych, np. \~2008 i \~2020).
 
 ## Analiza szeregu czasowego dla miesięcznej ceny uncji srebra
 
+### Eksploracja danych
+
+Celem dalszej analizy jest identyfikacja struktury deterministycznej i stochastycznej miesięcznych cen srebra w latach 2005–2025 oraz dobór adekwatnego modelu probabilistycznego do opisu dynamiki rynku.
+
+```{r}
+silver <- read_csv("data/silver_price_monthly_USD_2005_2025.csv",
+col_types = cols(
+date = col_character(),
+price_usd_per_troy_oz = col_double()
+)) %>% 
+mutate(date = ym(date)) %>% 
+arrange(date)
+```
+
+```{r}
+#| include: false
+# styl wykresów srebrny
+
+library(scales)
+
+COL_GOLD   <- "#6D8196"   
+COL_GOLD_D <- "#FF4202"   
+COL_BG     <- "#0F0F0F" 
+COL_GRID   <- "grey85"
+
+theme_silver <- function(base_size = 12) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(face = "bold", size = base_size + 4),
+      plot.subtitle = element_text(size = base_size),
+      axis.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = COL_GRID),
+      legend.position = "top",
+      legend.title = element_blank()
+    )
+}
+
+theme_set(theme_silver())
+```
+
+::: {layout="[40, 60]"}
+```{r}
+ggplot(silver, aes(date, price_usd_per_troy_oz)) +
+  geom_line(color = COL_GOLD, linewidth = 1.2) +
+  geom_point(color = COL_GOLD_D, size = 1.2, alpha = 0.35) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Srebro: średnia miesięczna cena (USD/oz)",
+    x = "Rok", y = "USD za uncję trojańską"
+  )+
+  theme(plot.title = element_text(size = 12, face = "bold"))
+```
+
+Szereg cen srebra charakteryzuje się trendem długookresowym oraz epizodami gwałtownych zmian poziomu (m.in. kryzys finansowy 2008, aprecjacji spekulacyjnej 2011, pandemia 2020). Już na etapie eksploracji widoczna jest niestacjonarność szeregu w średniej oraz brak stabilnych wahań o stałej amplitudzie.
+:::
+
+### Opisowa analiza trendu
+
+#### 1. Trend wielomianowy
+
+::: {layout="[40, 60]"}
+```{r}
+t <- 1:nrow(silver)
+aic_vec <- c()
+
+for (deg in 1:25) {
+  mod <- lm(price_usd_per_troy_oz ~ poly(t, degree = deg), data = silver)
+  aic_vec <- c(aic_vec, AIC(mod))
+}
+
+best_deg <- which.min(aic_vec)
+
+aic_df <- tibble(
+  degree = 1:25,
+  AIC = aic_vec,
+  is_best = degree == best_deg
+)
+
+ggplot(aic_df, aes(degree, AIC)) +
+  geom_line(color = COL_GOLD, linewidth = 1.1) +
+  geom_point(aes(fill = is_best),
+             shape = 21, size = 3.2, color = COL_GOLD_D, stroke = 1.0) +
+  scale_fill_manual(values = c(`FALSE` = "white", `TRUE` = COL_GOLD)) +
+  geom_vline(xintercept = best_deg, linetype = "dashed", color = COL_GOLD_D) +
+  scale_x_continuous(breaks = 1:25) +
+  labs(
+    title = "Dobór stopnia wielomianu trendu (AIC)",
+    x = "Stopień wielomianu",
+    y = "AIC"
+  ) +
+  theme(plot.title = element_text(size = 12, face = "bold"))+
+  theme_silver()
+```
+
+Dobór stopnia wielomianu przeprowadzono na podstawie kryterium informacyjnego AIC. Minimalna wartość AIC uzyskana została dla wielomianu wysokiego stopnia, co wskazuje na zdolność modelu do dokładnego dopasowania danych, lecz jednocześnie rodzi ryzyko nadmiernego dopasowania (overfittingu).
+:::
+
+::: {layout="[40, 60]"}
+```{r}
+# 1. Obliczenie trendu 5. stopnia
+mod_5 <- lm(price_usd_per_troy_oz ~ poly(t, degree = 5), data = silver)
+silver$trend_5 <- fitted(mod_5)
+
+# 2. Obliczenie trendu 21. stopnia
+mod_21 <- lm(price_usd_per_troy_oz ~ poly(t, degree = 19), data = silver)
+silver$trend_21 <- fitted(mod_21)
+
+# 3. Wykres
+ggplot(silver, aes(x = date)) +
+  # Oryginalne dane (punkty i linia)
+  geom_line(aes(y = price_usd_per_troy_oz), 
+            color = COL_GOLD, linewidth = 1, alpha = 0.5) +
+  geom_point(aes(y = price_usd_per_troy_oz), 
+             color = COL_GOLD, size = 1.2, alpha = 0.3) +
+
+  # Trend stopnia 5 
+  geom_line(aes(y = trend_5, color = "Stopień 5"), linewidth = 1.2) +
+
+  # Trend stopnia 21
+  geom_line(aes(y = trend_21, color = "Stopień 21"), linewidth = 1.2) +
+
+  # Ustawienie kolorów i legendy
+  scale_color_manual(values = c("Stopień 5" = "blue", "Stopień 21" = COL_GOLD_D)) +
+  
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Porównanie trendów wielomianowych",
+    x = "Rok",
+    y = "USD za uncję",
+    color = "Model"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+Wielomian 5. stopnia dostarcza gładkiej estymacji trendu długookresowego, dobrze oddając ogólny kierunek zmian cen srebra. Z kolei wielomian wysokiego stopnia (21) wykazuje nienaturalne oscylacje, próbując dopasować się do lokalnych fluktuacji losowych, co potwierdza jego skomplikowanie interpretacyjne. Wielomian 5. stopnia traktowany jest wyłącznie jako narzędzie opisowe.
+:::
+
+#### 2. Metoda ruchomych średnich i wykładniczych wag
+
+::: {layout="[40, 60]"}
+```{r}
+ruchoma = function(x, m){
+  t = length(x)
+  f = rep(NaN, length(x))
+  for (i in (m+1):t) {
+    f[i] = mean(x[(i-m):i])
+  }
+  return(f)
+}
+
+wykladnicza = function(x, mi){
+  f = rep(NaN, length(x))
+  f[1] = x[1]
+  t = length(x)
+  for (i in 2:t) {
+    f[i] = (1-mi)/(1-mi^i)*(x[i]+mi*f[i-1]*(1-mi^(i-1))/(1-mi))
+  }
+  return(f)
+}
+# --- MA(12) i EWMA ---
+silver <- silver %>%
+  arrange(date)
+
+# Ruchoma średnia 12-miesięczna (centrowana)
+silver$ma <- ruchoma(silver$price_usd_per_troy_oz, 12)
+
+# EWMA
+silver$ewma <- wykladnicza(silver$price_usd_per_troy_oz, 0.78) # aby model szybciej reagował na dynamiczny rynek
+
+# Dane do ggplot w formacie long (ładna legenda)
+smooth_long <- silver %>%
+  select(date, price_usd_per_troy_oz, ma, ewma) %>%
+  pivot_longer(
+    cols = c(price_usd_per_troy_oz, ma, ewma),
+    names_to = "series",
+    values_to = "value"
+  ) %>%
+  mutate(
+    series = recode(series,
+      price_usd_per_troy_oz = "Cena (miesięczna)",
+      ma = "MA(12) – średnia krocząca",
+      ewma = "EWMA"
+    )
+  )
+
+# Wykres
+ggplot(smooth_long, aes(x = date, y = value, color = series, linetype = series)) +
+  geom_line(linewidth = 1.15, na.rm = TRUE) +
+  scale_color_manual(values = c(
+    "Cena (miesięczna)" = COL_GOLD,
+    "MA(12) – średnia ruchoma" = "blue",
+    "EWMA" = COL_GOLD_D
+  )) +
+  scale_linetype_manual(values = c(
+    "Cena (miesięczna)" = "solid",
+    "MA(12) – średnia ruchoma" = "dashed",
+    "EWMA" = "dotdash"
+  )) +
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "2 years", date_labels = "%Y") +
+  labs(
+    title = "Wygładzanie: MA(12) i EWMA",
+    x = "Rok",
+    y = "USD za uncję trojańską"
+  ) +
+  theme_silver() +
+  theme(
+    legend.position = "top",
+    legend.key.width = unit(2.2, "lines")
+  )
+```
+
+Średnia ruchoma MA(12) interpretuje trend jako lokalny poziom cen w skali roku, przypisując jednakowe wagi ostatnim 12 obserwacjom i ignorując informacje wcześniejsze. Wygładzanie wykładnicze (EWMA) wykorzystuje pełną historię szeregu, przypisując obserwacjom wagi malejące wykładniczo. Parametr 𝜇 ≈ 0.78 dobrano tak, aby pamięć wygładzania wykłądniczego odpowiadała około 12 miesiącom, co umożliwia bezpośrednie porównanie z MA(12). Obie metody służą do identyfikacji trendu długookresowego, różniąc się jedynie szybkością reakcji na zmiany. EWMA reaguje płynniej i szybciej na szoki rynkowe, natomiast MA(12) tworzy bardziej „sztywną” estymację wartości ceny.
+:::
+
+Możemy również zauważyć, że EWMA lepiej oddaje charakter trendu niż MA, co potwierdza, że w analizowanym szeregu silny wpływ mają bieżące szoki i impulsy. Taki wpływ losowych fluktuacji na przyszłą cenę pozwala wysnuć przypuszczenie o istnieniu trendu stochastycznego w szeregu.
+
+### Analiza sezonowości i cykliczności. Dekompozycja szeregu
+
+::: {layout="[50, 50]"}
+```{r}
+silver_ts <- ts(silver$price_usd_per_troy_oz,start=c(2005,1) ,frequency = 12)
+library(forecast)
+ggseasonplot(silver_ts) +
+  theme_minimal() +
+  labs(title = "Sezonowość cen srebra (rok do roku)",
+       x = "Miesiąc",
+       y = "Cena USD") +
+  theme(legend.position = "right")
+```
+
+```{r}
+d_data <- decompose(silver_ts)
+
+decomp_df <- tibble(
+  date = silver$date,
+  Original = as.numeric(d_data$x),
+  Trend = as.numeric(d_data$trend),
+  Seasonal = as.numeric(d_data$seasonal),
+  Random = as.numeric(d_data$random)
+) %>%
+  pivot_longer(-date, names_to = "Component", values_to = "Value") %>%
+  mutate(Component = factor(Component, levels = c("Original", "Trend", "Seasonal", "Random")))
+
+ggplot(decomp_df, aes(x = date, y = Value)) +
+  geom_line(color = COL_GOLD) +
+  facet_wrap(~Component, scales = "free_y", ncol = 1) +
+  labs(title = "Dekompozycja klasyczna szeregu czasowego", x = NULL, y = NULL) +
+  theme_silver()+
+  theme(plot.title = element_text(size = 12, face = "bold"))
+```
+:::
+
+::: {layout="[50, 50]"}
+```{r}
+ts_adjusted <- d_data$x-d_data$seasonal
+par(mfrow=c(1,2))
+plot(d_data$x-d_data$seasonal, ylab = "Cena srebra (X-sezonowość)", xlab="Czas")
+plot(silver$price_usd_per_troy_oz, type ="l", ylab="Cena srebra", xlab = "i-ty miesiąc")
+```
+
+Z powyższych wykresów możemy wnioskować, że sezonowość nie jest statystycznie istotna. Zmiana wartości ceny to zakres maks. 0.6 USD. Potwierdza to również brak wyraźnej sezonowości na wykresie z biblioteki `ggseasonplot`, ponieważ obserwujemy brak wahań fazowych na poziomie co 12 miesięcy. Wykresy szeregu oryginalnego i skorygowanego o sezonowość są niemal identyczne. Jest to dowód na to, że usunięcie komponentu sezonowego nie zmienia struktury informacji w szeregu, co oznacza, że sygnał główny to wyłącznie trend.
+:::
+
+Na podstawie poniższych wzorów zaczerpniętych z pracy Wanga, Smitha i Hyndmana dotyczącej klasteryzacji szeregów czasowych w oparciu o ich charakterystyki strukturalne[^1]. Przedstawione przez nich metody pozwalają m.in. na opisanie szeregu czasowego poprzez następujący zestaw mierzalnych charakterystyk:
+
+[^1]: Wang, X., Smith, K. A., & Hyndman, R. J. (2006). Characteristic-based clustering for time series data. *Data Mining and Knowledge Discovery*, *13*(3), 335–364
+
+$$
+F_T = \max\left(0, 1 - \frac{\text{Var}(R_t)}{\text{Var}(T_t+R_t)}\right)
+$$
+
+$$
+F_S = \max\left(0, 1 - \frac{\text{Var}(R_t)}{\text{Var}(S_{t}+R_t)}\right)
+$$
+
+gdzie $F_T$ jest miarą siły trendu, natomiast $F_S$ - miarą siły sezonowości. $R_t, T_t, S_t$ reprezentują odpowiednio resztę, trend i sezonowość szeregu.
+
+```{r}
+S <- d_data$seasonal
+R <- d_data$random
+
+# Obliczamy wariancję (usuwamy NA, które powstają przy decompose)
+var_R <- var(R, na.rm = TRUE)
+var_SR <- var(S + R, na.rm = TRUE)
+
+# Implementacja wzoru
+F_S <- max(0,1 - (var_R / var_SR))
+
+# Wynik
+print(paste("Siła sezonowości (F_S):", round(F_S, 4)))
+```
+
+```{r}
+T_comp <- d_data$trend
+R_comp <- d_data$random
+
+# Obliczamy wariancję
+var_R <- var(R_comp, na.rm = TRUE)
+var_TR <- var(T_comp + R_comp, na.rm = TRUE)
+
+# Implementacja wzoru na siłę trendu
+F_T <- max(0,1 - (var_R / var_TR))
+
+print(paste("Siła trendu (F_T):", round(F_T, 4)))
+```
+
+Analiza składowych szeregu cen srebra wykazała niemal całkowitą dominację trendu nad jego składową sezonową. Amplituda wahań sezonowych (ok. ±0.5 USD) stanowi zaledwie niecałe 3% całkowitej zmienności szeregu (zakres 5-50 USD), co czyni ją pomijalną z punktu widzenia prognozowania średniookresowego.
+
+Mimo przeprowadzenia pełnej procedury identyfikacji sezonowości, wyniki jednoznacznie wskazują na brak istotnych i stabilnych składowych okresowych. W związku z tym, w dalszej części pracy rezygnujemy z rozbudowy modeli sezonowych.
+
+::: {layout="[50, 50]"}
+```{r}
+# Używamy spans, aby uzyskać gładką estymatę gęstości (zmniejszamy wariancję, wykorzystujemy okno Daniella do uzyskania zgodnego estymatora gęstości spektralnej)
+spec <- spectrum(na.omit(d_data$random), 
+                 method = "pgram", 
+                 spans = c(3, 3), 
+                 plot = FALSE)
+
+spec_df <- data.frame(freq = spec$freq, spec = spec$spec)
+
+ggplot(spec_df, aes(x = freq, y = spec)) +
+  geom_line(color = COL_GOLD, size = 1) +
+  # Dodajemy linię średniej - dla szumu białego wykres powinien być blisko niej
+  geom_hline(yintercept = mean(spec_df$spec), linetype = "dashed", alpha = 0.5) +
+  labs(title = "Gęstość spektralna reszt (wygładzona)", 
+       x = "Częstotliwość (cykle na rok)", 
+       y = "Gęstość") +
+  theme_silver()
+```
+
+```{r}
+# lagi takie dziwne, ponieważ R liczy teraz w latach, gdzie 0.5=pół roku
+# to zależy od frequency jaką ustawiłam
+acf(na.omit(d_data$random),lag.max=36, main="ACF składowej losowej po klasycznej dekompozycji")
+```
+:::
+
+Na wykresie spektralnej gęstości oś OX reprezentuje liczbę cykli na rok. Na wykresie widzimy dwa główne szczyty, które dominują nad resztą: pierwszy duży pik (ok. $f = 0.6$ ) to cykl trwający około 20 miesięcy ($1 / 0.6 \approx 1.67$ roku), natomiast drugi duży pik (ok. $f = 1.25$ ) to cykl trwający około 10 miesięcy ($1 / 1.25 \approx 0.8$ roku). Gdyby reszty były "białym szumem", linia powinna oscylować blisko poziomej przerywanej kreski na całej długości. Tutaj mamy do czynienia z sytuacją, w której pewne częstotliwości mają wielokrotnie większą moc niż inne. Wskazuje to na istnienie cyklu koniunkturalnego lub średniookresowego, którego klasyczny `decompose` nie potrafi odseparować, bo nie powtarza się on idealnie co 12 miesięcy. Ceny srebra często podlegają cyklom inwestycyjnym, które trwają np. ok. 1.5 roku, co możemy zaobserwować analizując wykres gęstości spektralnej. Potwierdzają to również autkorelacje, które widać na wykresie ACF tychże reszt: widoczne wystające słupki poza niebieskie linie przerywane (istotność statystyczna) oznaczają, że w składowej losowej nadal znajdują się informacje, których prosta metoda nie uchwyciła.
+
+### Charakter trendu: stochastyczny czy deterministyczny
+
+```{r}
+adf.test(log(silver$price_usd_per_troy_oz))
+adf.test(diff(log(silver$price_usd_per_troy_oz)))
+```
+
+W analizie zdecydowano się na przeprowadzenie testów stacjonarności bezpośrednio na logarytmach cen srebra, pomijając testy na danych surowych. Decyzja ta wynika z faktu, że szereg cenowy charakteryzuje się zmiennością proporcjonalną do poziomu cen (heteroskedastyczność). Transformacja logarytmiczna jest niezbędnym krokiem wstępnym, który stabilizuje wariancję szeregu, co jest warunkiem koniecznym dla poprawności wyników testu ADF oraz późniejszego modelowania. Testowanie danych niezlogarytmowanych, w obliczu wyraźnego efektu skali, mogłoby prowadzić do błędnych wniosków statystycznych.
+
+W celu zbadania charakteru trendu przeprowadzono test ADF na zlogarytmowanych danych. Zastosowanie logarytmu naturalnego pozwoliło na stabilizację wariancji szeregu oraz umożliwiło interpretację wyników w kategoriach stóp zwrotu. Wyniki testu ADF dla logarytmów poziomów nie dają podstaw do odrzucenia hipotezy zerowej o braku stacjonarności ($p=0.62$). Dopiero pierwsze różnicowanie logarytmów pozwoliło na odrzucenie hipotezy zerowej ($p < 0.01$). Oznacza to, że proces jest zintegrowany rzędu pierwszego, $I(1)$, a występujący w nim trend ma charakter stochastyczny. Taka struktura szeregu wyklucza stosowanie prostych modeli trendu deterministycznego na rzecz modeli różnicowych typu ARIMA.
+
+### Analiza zmian strukturalnych
+
+::: {layout="[50, 50]"}
+```{r}
+### Analiza stabilności strukturalnej
+# Testujemy, czy w trendzie występują nagłe załamania (break points)
+
+# Konwersja do obiektu TS dla pakietu strucchange
+silver_ts_price <- ts(silver$price_usd_per_troy_oz, start = c(2005, 1), frequency = 12)
+
+# Identyfikacja punktów zwrotnych (breakpoints)
+bp_silver <- breakpoints(silver_ts_price ~ 1)
+
+# Wyciągnięcie dat zmian
+break_dates <- 2005 + (bp_silver$breakpoints / 12)
+
+# Wizualizacja
+plot(silver_ts_price, main = "Zmiany strukturalne na rynku srebra", 
+     ylab = "Cena (USD)", col = "gray40", lwd = 1.5)
+lines(fitted(bp_silver, breaks = length(break_dates)), col = COL_GOLD, lwd = 2)
+abline(v = break_dates, lty = 2, col = COL_GOLD_D)
+legend("topleft", legend = c("Cena", "Średnia w podokresach", "Momenty zmian"),
+       col = c("gray40", COL_GOLD, COL_GOLD_D), lty = c(1, 1, 2), lwd = c(1.5, 2, 1))
+```
+
+```{r}
+# Wycinamy okres 2014-2018 (60 miesięcy)
+stable_silver <- window(silver_ts, start=c(2014, 1), end=c(2018, 12))
+# Ponawiamy dekompozycję i spektrum tylko dla tego "spokojnego" wycinka
+d_stable <- decompose(stable_silver)
+spec1 <- spectrum(na.omit(d_stable$random), 
+                 method = "pgram", 
+                 spans = c(3, 3), 
+                 plot = FALSE)
+
+spec_df1 <- data.frame(freq = spec1$freq, spec = spec1$spec)
+
+ggplot(spec_df1, aes(x = freq, y = spec)) +
+  geom_line(color = COL_GOLD, size = 1) +
+  geom_hline(yintercept = mean(spec_df1$spec), linetype = "dashed", alpha = 0.5) +
+  labs(title = "Gęstość spektralna reszt dla lat 2014-2018", 
+       x = "Częstotliwość (cykle na rok)", 
+       y = "Gęstość") +
+  theme_silver()
+```
+:::
+
+```         
+Wykryto istotne zmiany strukturalne w latach: 2010.7, 2013.8, 2019.8, 2022.9
+```
+
+Ceny surowców często podlegają nagłym zmianom reżimu związanym z kryzysami finansowymi, interwencjami banków centralnych lub szokami popytowymi. W celu weryfikacji stabilności strukturalnej szeregu zastosowano procedurę identyfikacji punktów załamania (breakpoints), która pozwala wykryć momenty istotnych zmian poziomu średniego. Zidentyfikowane punkty zmian strukturalnych odpowiadają znanym epizodom niestabilności rynku srebra, w szczególności okresowi globalnego kryzysu finansowego (2008–2009) oraz aprecjacji spekulacyjnej z 2011 roku. Obecność wielu reżimów potwierdza, że proces cenowy nie jest jednorodny w czasie. Po ograniczeniu analizy do względnie stabilnego podokresu (2014–2018) gęstość spektralna ulega dalszemu spłaszczeniu, co jest typowe dla procesu zbliżonego do białego szumu. Oznacza to, że obserwowane wcześniej piki mają charakter przejściowy i są konsekwencją zmian strukturalnych, a nie istnienia trwałej cykliczności.
+
+### Model stochastyczny ARIMA
+
+```{r}
+y <- diff(log(silver$price_usd_per_troy_oz))
+model <- auto.arima(y, seasonal = FALSE)
+model
+```
+
+Ze względu na stwierdzony trend stochastyczny typu $I(1)$ modelowanie przeprowadzono na pierwszych różnicach logarytmów cen srebra, co pozwala interpretować zmienność w kategoriach względnych zmian cen. Automatyczna procedura identyfikacji wskazała model ARIMA(0,0,1) z niezerową średnią jako najlepszy kompromis pomiędzy dopasowaniem a parsymonią. Istotny parametr MA(1) świadczy o krótkookresowej zależności losowej, natomiast brak składników autoregresyjnych potwierdza brak długiej pamięci procesu.Wynik ten jest spójny z charakterystyką rynków surowcowych, gdzie zmiany cen są w dużej mierze napędzane nową informacją.
+
+```{r}
+# Pobranie reszt modelu ARIMA
+eps <- as.numeric(residuals(model))
+
+# 1. TEST SERII STEVENSA (na losowość)
+# Tworzymy wektor binarny: 1 jeśli powyżej mediany, 0 jeśli poniżej
+eps_bin <- as.numeric(eps > median(eps))
+runs_res <- tseries::runs.test(as.factor(eps_bin)) # tseries wymaga faktora, ale lawstat numerycznego
+
+print("Test serii (Stevensa) na losowość:")
+print(runs_res)
+
+# 2. TEST KOŁMOGOROWA-SMIRNOWA (na rozkład)
+eps_std <- (eps - mean(eps)) / sd(eps)
+ks_res <- ks.test(eps_std, "pnorm")
+print("Test Kołmogorowa-Smirnowa:")
+print(ks_res)
+
+# 3. KORELACJA W CZASIE (Autokorelacja liniowa i wariancji)
+par(mfrow=c(1,2))
+Acf(eps, main="ACF dla reszt")
+Acf(eps^2, main="ACF dla reszt^2 (ARCH)")
+```
+
+Test Stevensa nie wykazał istotnych odstępstw od losowości (p-value = 0.80), co oznacza, że reszty modelu ARIMA(0,0,1) są losowe. Test Kołmogorowa-Smirnowa z kolei potwierdził zgodność standaryzowanych reszt z rozkładem normalnym (p-value = 0.91). Brak istotnych autokorelacji zarówno w resztach, jak i w ich kwadratach wskazuje, że model ARIMA skutecznie wyeliminował zależności liniowe oraz większość potencjalnych efektów heteroskedastyczności. Sugeruje to, że wystrzały ceny to jednorazowe impulsy, a nie wejście rynku w fazę długiej destabilizacji.
+
+```{r}
+#| include: false
+autogarch <- function(series, minp = 1, minq = 0, maxp, maxq){
+  library(lmtest)
+  t <- 1:length(series)
+  model <- lm(series~t)
+  gq <- gqtest(model)
+  bp <- bptest(model)
+  hmc <- hmctest(model)
+  if(gq$p.value>0.05 & bp$p.value>0.05 & hmc$p.value>0.05) 
+  {
+    print("Nie ma heteroskedastyczności")
+    adf.res <- adf.test(series)
+    
+    print("Szereg stacjonarny")
+    title <- ifelse(adf.res$p.value<0.05, "Szereg stacjonarny", "Szereg niestacjonarny")
+    library(forecast)
+    arima <- auto.arima(series)
+    plot(series, type ="l")
+    title(paste0(title, " ARIMA(", length(arima$model$phi), arima$model$Delta, ",",
+            length(arima$model$theta), ")"))
+    return()
+  }
+  arch.order <- garch.order <- aic.value <- NULL
+  for (p in minp:maxp) {
+    for (q in minq:maxq) {
+      mod <- garch(series, order = c(q,p),
+                   trace = F)
+      arch.order <- c(arch.order, p)
+      garch.order <- c(garch.order, q)
+      aic.value <- c(aic.value, AIC(mod))
+    }
+  }
+  df <- data.frame(arch.order, garch.order, aic.value)
+  best <- which.min(df$aic.value)
+  best.arch <- df$arch.order[best]
+  best.garch <- df$garch.order[best]
+  best.model <- garch(series, order = c(best.garch, best.arch),
+                      trace = F)
+  plot(series, type="l")
+  title(paste0("Szereg Garch, p = ", best.arch, "; q = ", best.garch))
+  return(best.model)
+}
+
+autogarch(y)
+```
+
+::: {layout="[40, 60]"}
+```{r}
+res_arima <- residuals(model)
+spec_arima <- spectrum(na.omit(res_arima), spans = c(3,3), plot = FALSE)
+spec_arima1 <- data.frame(freq = spec_arima$freq, spec = spec_arima$spec)
+
+ggplot(spec_arima1, aes(x = freq, y = spec)) +
+  geom_line(color = COL_GOLD, size = 1) +
+  geom_hline(yintercept = mean(spec_arima1$spec), linetype = "dashed", alpha = 0.5) +
+  labs(title = "Gęstość spektralna reszt (wygładzona)",
+       x = "Częstotliwość (skala 'cykli na miesiąc')", 
+       y = "Gęstość") +
+  theme_silver()
+```
+
+Ostateczna weryfikacja modelu ARIMA poprzez analizę spektralną reszt (wykres gęstości spektralnej reszt) potwierdza wysoką jakość dopasowania. W przeciwieństwie do reszt z dekompozycji klasycznej, gęstość widmowa reszt modelu ARIMA nie wykazuje żadnych dominujących pików dla częstotliwości cyklicznych, ponieważ maksymalne wartości gęstości spadły z poziomu 0.17 do ok. 0.01, a ich rozkład ma charakter chaotyczny, typowy dla białego szumu. Oznacza to, że model skutecznie wyeliminował z szeregu wszystkie zależności autokorelacyjne i cykle średniookresowe.
+:::
+
+Mimo wstępnych przesłanek (pojedyncze lagi w ACF kwadratów reszt), zdecydowano o pominięciu modelu GARCH w ostatecznej specyfikacji. Diagnostyka modelu sGARCH(1,1) wykazała brak istotności parametrów strukturalnych oraz brak poprawy kryterium AIC względem modelu ARIMA. Zgodnie z procedurą selekcji modeli (funkcja `autogarch` z laboratoriów), przy braku trwałej heteroskedastyczności warunkowej, model ARIMA(0,1,1), zbudowany na szeregu zlogarytmowanym, stanowi optymalne narzędzie prognostyczne, ponieważ najlepiej opisuje dynamikę logarytmicznych stóp zwrotu cen srebra, minimalizując kryterium AIC.
+
+### Prognoza
+
+```{r}
+### Prognozowanie i porównanie modeli
+
+# 1. Dzielimy zbiór na treningowy i testowy (ostatnie 12 miesięcy)
+train_set <- head(silver_ts, length(silver_ts) - 12)
+test_set  <- tail(silver_ts, 12)
+
+# 2. Model ARIMA na danych oryginalnych z lambda=0 (wymusza logarytmy)
+# biasadj=TRUE koryguje średnią przy powrocie z logarytmu (ważne!)
+fit_arima <- auto.arima(train_set, lambda = 0, biasadj = TRUE)
+
+# 3. Model ETS (konkurencyjny)
+fit_ets <- ets(train_set, lambda = 0)
+
+# 4. Generowanie prognoz na 24 miesiące (12 testowych + 12 w przyszłość)
+fc_arima <- forecast(fit_arima, h = 24, biasadj = TRUE)
+fc_ets   <- forecast(fit_ets, h = 24, biasadj = TRUE)
+
+# 5. Wykres końcowy
+autoplot(silver_ts) +
+  autolayer(fc_arima, series = "ARIMA", PI = TRUE, alpha = 0.3) +
+  autolayer(fc_ets, series = "ETS", PI = FALSE) + # Wyłączamy przedziały dla ETS dla czytelności
+  scale_color_manual(values = c("ARIMA" = "red", "ETS" = "blue")) +
+  coord_cartesian(xlim = c(2018, 2026)) + # Zbliżenie na ostatnie lata
+  labs(
+    title = "Prognoza cen srebra: ARIMA vs ETS",
+    subtitle = "Dane historyczne + prognoza na 2 lata",
+    y = "USD / oz", x = "Rok"
+  ) +
+  theme_silver()
+
+# 6. Ocena dokładności na zbiorze testowym
+print("Dokładność ARIMA:")
+accuracy(fc_arima, test_set)
+
+print("Dokładność ETS:")
+accuracy(fc_ets, test_set)
+```
+
+Porównanie modeli ARIMA i ETS na zbiorze testowym wykazało zbliżoną jakość prognoz, przy nieznacznej przewadze modelu ARIMA. W obu przypadkach błędy prognoz rosną wraz z horyzontem, co jest typowe dla rynków o wysokiej niepewności i ograniczonej przewidywalności. Mimo że diagnostyka reszt potwierdza wysoką wiarygodność statystyczną modelu ARIMA(0,0,1), prognoza punktowa znajduje się poniżej ostatnich wartości rynkowych. Wynika to z charakterystyki modeli klasy ARIMA, które w horyzoncie długookresowym wykazują tendencję do powrotu do historycznej średniej stopy wzrostu. Obecne poziomy cen srebra są interpretowane przez model jako silne odchylenie od trendu stochastycznego, co skutkuje konserwatywną predykcją. Wskazuje to na konieczność uwzględnienia wysokiej niepewności rynkowej, co potwierdzają szerokie przedziały ufności prognozy.
+
+### Wnioski
+
+Analiza wykazała, że dynamika cen srebra jest zdominowana przez trend stochastyczny oraz losowe fluktuacje krótkookresowe, przy braku istotnej sezonowości i stabilnej cykliczności. Po transformacji logarytmicznej i różnicowaniu uzyskano proces stacjonarny, którego struktura została poprawnie opisana modelem ARIMA(0,0,1). Dodatkowa analiza spektralna i testy stabilności potwierdziły, że zaobserwowane oscylacje mają charakter przejściowy i wynikają głównie ze zmian strukturalnych rynku.
+
 ## Analiza szeregu czasowego dla miesięcznej ceny uncji miedzi
 
 ### Pytania badawcze
-1. Czy szereg wykazuje trend lub sezonowość?
-2. Czy po transformacji (log, różnice) szereg jest stacjonarny?
-3. Który model (ETS/ARIMA/baseline) daje najlepszą prognozę na 12–24 miesiące?
-4. Czy w danych występują zmiany strukturalne?
 
+1.  Czy szereg wykazuje trend lub sezonowość?
+2.  Czy po transformacji (log, różnice) szereg jest stacjonarny?
+3.  Który model (ETS/ARIMA/baseline) daje najlepszą prognozę na 12–24 miesiące?
+4.  Czy w danych występują zmiany strukturalne?
 
 ```{r}
 # Wczytanie danych miedzi
@@ -991,7 +1547,6 @@ y_train_cu <- ts(train_cu$price_usd_per_troy_oz, frequency = 12, start = c(2005,
 y_test_cu  <- ts(test_cu$price_usd_per_troy_oz,  frequency = 12, start = c(2024, 1))
 ```
 
-
 ```{r}
 # Styl wykresów MIEDZIANY
 COL_COPPER <- "#B87333" 
@@ -1015,6 +1570,7 @@ theme_set(theme_copper())
 ```
 
 ### EDA: wykres, rozkład, outliery
+
 Szereg cen miedzi wykazuje inną charakterystykę niż złoto. Miedź jest metalem ściśle przemysłowym, dlatego jej cena silnie reaguje na cykle koniunkturalne, pełniąc rolę barometru globalnej gospodarki.
 
 ::: {layout="[40, 60]"}
@@ -1029,8 +1585,10 @@ ggplot(copper, aes(date, price_usd_per_troy_oz)) +
     x = "Rok", y = "USD za uncję trojańską"
   )
 ```
+
 W przeciwieństwie do złota, które często rośnie w czasie niepokojów jako "bezpieczna przystań", miedź wykazuje większą zmienność cykliczną, podążając za tempem globalnego wzrostu PKB.
 :::
+
 **Gwałtowny spadek (2008/2009)**: Reakcja na Globalny Kryzys Finansowy i załamanie popytu inwestycyjnego.
 
 **Trend spadkowy (2011–2016)**: Wynikał ze spowolnienia gospodarczego w Chinach (największego konsumenta miedzi) oraz nadpodaży surowca po okresie inwestycyjnym ("koniec supercyklu surowcowego").
@@ -1055,8 +1613,8 @@ ggplot(copper, aes(price_usd_per_troy_oz)) +
 
 Rozkład cen miedzi w badanym okresie jest jednomodalny (posiada jedno główne maksimum), z najsilniejszą koncentracją obserwacji w przedziale 0.20–0.25 USD/oz. Wskazuje to, że mimo licznych wahań koniunkturalnych, rynek miedzi najczęściej dążył do równowagi w tym właśnie zakresie cenowym.
 :::
-W przeciwieństwie do złota, którego rozkład charakteryzował się silną asymetrią prawostronną (długi ogon oznaczający ucieczkę cen w górę), rozkład miedzi jest bardziej symetryczny, lecz szeroki (duża dyspersja). Oznacza to, że miedź jest aktywem o wysokiej zmienności w obie strony – ceny potrafią dynamicznie rosnąć w czasie boomu, ale też głęboko spadać w czasie recesji, rzadko jednak wybijając się trwale na ekstremalnie wysokie poziomy bez późniejszej korekty.
 
+W przeciwieństwie do złota, którego rozkład charakteryzował się silną asymetrią prawostronną (długi ogon oznaczający ucieczkę cen w górę), rozkład miedzi jest bardziej symetryczny, lecz szeroki (duża dyspersja). Oznacza to, że miedź jest aktywem o wysokiej zmienności w obie strony – ceny potrafią dynamicznie rosnąć w czasie boomu, ale też głęboko spadać w czasie recesji, rzadko jednak wybijając się trwale na ekstremalnie wysokie poziomy bez późniejszej korekty.
 
 ::: {layout="[40, 60]" layout-valign="top"}
 ```{r}
@@ -1077,7 +1635,7 @@ ggplot(copper_heat, aes(month, factor(year), fill = price_usd_per_troy_oz)) +
 ```
 
 Podobnie jak w przypadku złota, mapa ciepła dla miedzi wskazuje na dominację zmian między latami (poziome pasy) nad zmianami wewnątrz roku (sezonowość miesięczna). Wyraźnie widać „ciemne pasy” w latach boomu surowcowego (ok. 2011 oraz po 2020 r.) oraz „jasne obszary” odpowiadające niższym poziomom cenowym: na początku badanego okresu (2005) oraz w latach spowolnienia gospodarczego (koniec 2008/2009, 2015/2016). Brak wyraźnych pionowych pasów sugeruje, że sezonowość kalendarzowa (np. wzrosty zawsze w marcu) jest słabsza niż wpływ globalnych trendów makroekonomicznych.
-::: 
+:::
 
 ### Dekompozycja szeregu
 
@@ -1095,16 +1653,16 @@ autoplot(decomp_cu) +
   ggtitle("Dekompozycja cen miedzi (STL)") +
   theme_copper()
 ```
+
 **Dominacja Trendu i Cyklu:** Głównym czynnikiem kształtującym cenę miedzi jest składowa trendu (panel trend). Nie jest ona liniowa, lecz wykazuje silną cykliczność, z wyraźnymi załamaniami w okresach recesji (2008, 2020). Potwierdza to, że miedź jest surowcem wrażliwym na koniunkturę gospodarczą.
 
-**Marginalna Sezonowość:** Panel seasonal wskazuje na istnienie powtarzalnego wzorca rocznego, jednak jego siła jest znikoma. Analizując szare paski skali, widzimy, że wahania sezonowe mają amplitudę rzędu ~0.008 USD/oz, co stanowi ułamek wartości surowca (ok. 2-3% ceny). Oznacza to, że choć matematycznie można wyodrębnić pewną sezonowość, to ekonomicznie jest ona zagłuszana przez silne zmiany trendu i szoki rynkowe.
-
+**Marginalna Sezonowość:** Panel seasonal wskazuje na istnienie powtarzalnego wzorca rocznego, jednak jego siła jest znikoma. Analizując szare paski skali, widzimy, że wahania sezonowe mają amplitudę rzędu \~0.008 USD/oz, co stanowi ułamek wartości surowca (ok. 2-3% ceny). Oznacza to, że choć matematycznie można wyodrębnić pewną sezonowość, to ekonomicznie jest ona zagłuszana przez silne zmiany trendu i szoki rynkowe.
 
 ### Trend: aproksymacja wielomianowa
+
 Przyjęto maksymalny stopień wielomianu równy 12, analogicznie do analizy złota. Choć kryterium AIC sugeruje dalszy spadek wartości dla wyższych stopni, ograniczenie to wynika z chęci uniknięcia nadmiernego dopasowania oraz braku ekonomicznego uzasadnienia dla stosowania wielomianów tak wysokiego rzędu do opisu cykli surowcowych.
 
 ::: {layout="[50, 50]"}
-
 ```{r}
 # Wybór stopnia wielomianu (identyczna pętla jak dla złota)
 t <- 1:nrow(copper)
@@ -1157,9 +1715,10 @@ ggplot(copper, aes(date)) +
 
 Mimo zastosowania wielomianu wysokiego stopnia (12), dopasowana krzywa nie oddaje precyzyjnie dynamiki cen miedzi. Przebieg trendu wielomianowego jest z natury zbyt "gładki" i łagodny, przez co model "ścina" ostre punkty zwrotne (głębokie dołki kryzysowe w 2008 i 2020 roku oraz gwałtowne szczyty). Wskazuje to, że sztywna funkcja matematyczna nie jest w stanie w pełni odwzorować złożonej, ostrej cykliczności surowca, co uzasadnia przejście do bardziej elastycznych metod wygładzania (MA, EWMA).
 
-
 ### Wygładzanie: MA i EWMA
+
 Zastosowano dwie metody wygładzania szeregu: prostą średnią ruchomą MA(12) oraz średnią wykładniczą EWMA.
+
 ```{r}
 #zdefiniowana przy złocie już!!!!
 ewma <- function(x, lambda = 0.2) {
@@ -1171,7 +1730,6 @@ ewma <- function(x, lambda = 0.2) {
 ```
 
 ::: {layout="[40, 60]"}
-
 ```{r}
 # --- MA(12) i EWMA ---
 copper <- copper %>% arrange(date)
@@ -1194,8 +1752,9 @@ ggplot(smooth_long_cu, aes(x = date, y = value, color = series, linetype = serie
   labs(title = "Wygładzanie cen miedzi", x = "Rok", y = "USD/oz")
 
 ```
+
 Analiza wykresu pokazuje, że obie metody radzą sobie z opisem trendu znacznie lepiej niż sztywny model wielomianowy, poprawnie podążając za cyklicznymi zwrotami cen. Warto jednak zauważyć przewagę metody EWMA (linia brązowa), która dzięki mechanizmowi wykładniczych wag szybciej reaguje na gwałtowne zmiany rynkowe (np. odbicie po COVID-19 w 2020 r.) i ściślej przylega do rzeczywistego przebiegu cen. Metoda MA(12) (linia czarna), choć skutecznie eliminuje szum, wykazuje zauważalne opóźnienie (efekt inercji) w punktach zwrotnych, co jest naturalną cechą średnich arytmetycznych o stałych wagach.
-::: 
+:::
 
 ### Stacjonarność i transformacje
 
@@ -1212,6 +1771,7 @@ copper <- copper %>%
 print("ADF dla log(ceny):")
 print(adf.test(na.omit(copper$log_price)))
 ```
+
 ```{r}
 print("ADF dla zwrotów (diff log):")
 print(adf.test(na.omit(copper$dlog_price)))
@@ -1221,8 +1781,7 @@ Wynik testu dla **logarytmu cen** jest niejednoznaczny. P-value wynosi 0.047, co
 
 Natomiast dla **pierwszych różnic (log-zwrotów)** test daje bardzo silny wynik ($p < 0.01$), co jednoznacznie potwierdza stacjonarność. Dlatego, mimo granicznego wyniku dla poziomów, w dalszym modelowaniu (ARIMA) traktujemy proces jako niestacjonarny (z trendem stochastycznym) i wymagający różnicowania. Oznacza to, że przyszła cena zależy od skumulowanych, losowych szoków rynkowych, a nie tylko od upływu czasu.
 
-
-### Modelowanie i prognoza (Train 2005-2023 / Test 2024) 
+### Modelowanie i prognoza (Train 2005-2023 / Test 2024)
 
 ```{r}
 # Modele
@@ -1244,7 +1803,7 @@ fc_arima_bc_cu  <- forecast(fit_arima_bc_cu, h=h)
 
 #### Porównanie metryczne
 
-::: {layout="[30, 70]"}
+:::::: {layout="[30, 70]"}
 ```{r}
 # Tabela błędów (analogiczna do złota)
 acc_tbl_cu <- tibble(
@@ -1271,12 +1830,12 @@ best_model_cu <- acc_tbl_cu$model[1]
 acc_tbl_cu
 
 ```
+
 Najlepsze wyniki prognostyczne na zbiorze testowym osiągnął model **ARIMA z transformacją Boxa-Coxa**, uzyskując najniższy błąd RMSE (0.0216) oraz MAPE (5.74%).Wynik ten potwierdza wcześniejsze wnioski z analizy EDA – miedź charakteryzuje się zmienną wariancją (amplituda wahań zależy od poziomu cen), dlatego zastosowanie transformacji stabilizującej (Box-Cox) pozwoliło na lepsze dopasowanie modelu niż w przypadku klasycznej ARIMY czy modeli wykładniczych (ETS). Słabszy wynik modelu NAIVE (ostatnie miejsce) świadczy o tym, że w danych występuje struktura (autokorelacja/trend), którą modele zaawansowane potrafiły wykorzystać.
 
 #### Porównanie wizualne
 
 ::: {layout="[40, 60]"}
-
 ```{r}
 # Przygotowanie danych do wykresu (kod skopiowany od złota, zmienione zmienne)
 plot_start <- ymd("2020-01-01")
@@ -1310,13 +1869,14 @@ ggplot() +
   theme_copper()
 
 ```
+
 Analiza wizualna ujawnia istotne wyzwanie w prognozowaniu cen surowców. Mimo że model ARIMA (BoxCox) (przerywana linia brązowa) osiągnął najmniejszy błąd średni, jego prognoza ma charakter zachowawczy - wyznacza "ścieżkę środka", wokół której oscyluje rzeczywista cena.
-::: 
+:::
 
-Rzeczywisty kurs miedzi w 2024 roku (ciągła linia) wykazał silną zmienność (gwałtowny skok w pierwszej połowie roku i późniejszą korektę), której modele statystyczne oparte na historii nie były w stanie precyzyjnie odwzorować co do kształtu. Jest to zjawisko typowe dla szeregów surowcowych, gdzie lokalne szoki (popytowe/podażowe) odchylają cenę od trendu długoterminowego. Mimo to, niski błąd MAPE (~5.7%) wskazuje, że model poprawnie określił przeciętny poziom cen w badanym okresie.
-
+Rzeczywisty kurs miedzi w 2024 roku (ciągła linia) wykazał silną zmienność (gwałtowny skok w pierwszej połowie roku i późniejszą korektę), której modele statystyczne oparte na historii nie były w stanie precyzyjnie odwzorować co do kształtu. Jest to zjawisko typowe dla szeregów surowcowych, gdzie lokalne szoki (popytowe/podażowe) odchylają cenę od trendu długoterminowego. Mimo to, niski błąd MAPE (\~5.7%) wskazuje, że model poprawnie określił przeciętny poziom cen w badanym okresie.
 
 ### Finalna prognoza 24 miesiące do przodu
+
 Prognozę na kolejne 24 miesiące wygenerowano przy użyciu najlepszego modelu: ARIMA z transformacją Boxa-Coxa.
 
 ::: {layout="[40, 60]"}
@@ -1343,7 +1903,6 @@ autoplot(final_fc_cu) +
 :::
 
 Model sugeruje, że choć najbardziej prawdopodobnym scenariuszem jest utrzymanie obecnych poziomów cenowych, rynek miedzi pozostaje obarczony gigantycznym ryzykiem. W perspektywie 2 lat cena z 95-procentowym prawdopodobieństwem może znaleźć się w przedziale od kryzysowych 0.15 USD do rekordowych 0.40 USD. Oznacza to, że przyszłość rynku zależy nie od trendu technicznego, lecz od nadchodzących impulsów fundamentalnych (np. tempo transformacji energetycznej vs. globalna recesja).
-
 
 ### Zmiany strukturalne (PELT)
 
@@ -1413,7 +1972,6 @@ ggplot(copper_cp_df, aes(x = date, y = value)) +
 Metoda PELT (czerwona linia schodkowa) wykryła w szeregu czasowym istotne zmiany strukturalne. Wykres wyraźnie dzieli historię notowań na kilka odrębnych „reżimów”, w których średni poziom cen oraz ich wariancja były różne.
 :::
 
-
 Kluczowe punkty zwrotne wykryte przez algorytm pokrywają się z najważniejszymi wydarzeniami makroekonomicznymi:
 
 -   Gwałtowny spadek: Odpowiada załamaniu podczas Globalnego Kryzysu Finansowego (2008/2009).
@@ -1423,9 +1981,17 @@ Kluczowe punkty zwrotne wykryte przez algorytm pokrywają się z najważniejszym
 Wynik ten stanowi ostateczne potwierdzenie, że parametry generujące proces cenowy nie są stałe w czasie. Występowanie tak silnych zmian strukturalnych jest koronnym argumentem przeciwko stosowaniu prostych modeli liniowych na całej 20-letniej próbie i w pełni uzasadnia konieczność stosowania modeli adaptacyjnych (takich jak użyta wcześniej ARIMA z transformacją Boxa-Coxa), które potrafią dostosować się do zmieniającej się zmienności rynku.
 
 ### Podsumowanie analizy miedzi
-Analiza miesięcznych cen miedzi wskazuje na silną naturę cykliczną surowca (naprzemienne okresy boomu i recesji skorelowane z koniunkturą gospodarczą), przy czym sezonowość miesięczna jest marginalna i ekonomicznie pomijalna w porównaniu do składowej trendu. Testy stacjonarności dały wynik graniczny dla log(cena) (p-value $\approx$ 0.047), jednak ze względu na charakter danych giełdowych oraz jednoznaczny wynik dla `diff(log(cena))` (silne odrzucenie hipotezy o niestacjonarności), szereg modelowano jako proces zintegrowany I(1).W porównaniu modeli prognostycznych na zbiorze testowym (h = 12, rok 2024) najlepsze wyniki uzyskał model ARIMA z transformacją Box–Cox (najniższe RMSE i MAPE). Zastosowanie tej transformacji było kluczowe ze względu na zmienną wariancję (amplituda wahań rośnie wraz z poziomem cen). Model ten pokonał proste benchmarki (NAIVE, DRIFT), co potwierdza istnienie struktury zależności możliwej do prognozowania, mimo trudnego rynku w 2024 roku. Finalna prognoza 24-miesięczna wskazuje na stabilizację poziomu cen (zachowawczy charakter modelu), ale obarczona jest **ogromną niepewnością** (bardzo szerokie przedziały ufności). Analiza zmian strukturalnych (PELT) potwierdziła występowanie **odrębnych reżimów zmienności**, pokrywających się z kluczowymi szokami makroekonomicznymi (2008, 2011, 2020), co tłumaczy wyższość metod adaptacyjnych (EWMA, ARIMA) nad sztywnymi trendami deterministycznymi.
 
+Analiza miesięcznych cen miedzi wskazuje na silną naturę cykliczną surowca (naprzemienne okresy boomu i recesji skorelowane z koniunkturą gospodarczą), przy czym sezonowość miesięczna jest marginalna i ekonomicznie pomijalna w porównaniu do składowej trendu. Testy stacjonarności dały wynik graniczny dla log(cena) (p-value $\approx$ 0.047), jednak ze względu na charakter danych giełdowych oraz jednoznaczny wynik dla `diff(log(cena))` (silne odrzucenie hipotezy o niestacjonarności), szereg modelowano jako proces zintegrowany I(1).W porównaniu modeli prognostycznych na zbiorze testowym (h = 12, rok 2024) najlepsze wyniki uzyskał model ARIMA z transformacją Box–Cox (najniższe RMSE i MAPE). Zastosowanie tej transformacji było kluczowe ze względu na zmienną wariancję (amplituda wahań rośnie wraz z poziomem cen). Model ten pokonał proste benchmarki (NAIVE, DRIFT), co potwierdza istnienie struktury zależności możliwej do prognozowania, mimo trudnego rynku w 2024 roku. Finalna prognoza 24-miesięczna wskazuje na stabilizację poziomu cen (zachowawczy charakter modelu), ale obarczona jest **ogromną niepewnością** (bardzo szerokie przedziały ufności). Analiza zmian strukturalnych (PELT) potwierdziła występowanie **odrębnych reżimów zmienności**, pokrywających się z kluczowymi szokami makroekonomicznymi (2008, 2011, 2020), co tłumaczy wyższość metod adaptacyjnych (EWMA, ARIMA) nad sztywnymi trendami deterministycznymi.
 
 ## Podsumowanie
 
-zrobi to osoba która bedzie swoją część projektu robiła jako ostatnia, summary z rzeczy opisanych przez wszystkie osoby
+Projekt obejmuje analizę dynamiki cen srebra, miedzi i złota w latach 2005–2025, ze szczególnym naciskiem na identyfikację komponentów losowych, zmienności oraz reakcji rynku na globalne szoki gospodarcze. Ze względu na niestacjonarność szeregów poziomów, analiza została przeprowadzona na logarytmach i pierwszych różnicach ($I(1)$ ), co pozwoliło uzyskać procesy stacjonarne i poprawnie zastosować modele prognostyczne.
+
+W ramach modelowania porównano podejścia ARIMA i ETS, a ich jakość oceniono na podstawie diagnostyki reszt (ACF, testy heteroskedastyczności Gldfelda-Quandta i Breuscha-Pagana) oraz miar błędu prognoz (MAPE, RMSE). Analiza zmian strukturalnych (test PELT) potwierdziła występowanie okresowych załamań cenowych, jednak mimo tych zaburzeń model ARIMA(0,1,1) z transformacją Boxa–Coxa okazał się najbardziej oszczędny i stabilny. Uzyskane wyniki wskazują na stopniową stabilizację ryzyka rynkowego w prognozowanym horyzoncie do 2026 roku.
+
+## Źródła
+-   Wang, X., Smith, K. A., & Hyndman, R. J. (2006). Characteristic-based clustering for time series data. *Data Mining and Knowledge Discovery*, *13*(3), 335–364
+
+-   Forecasting: Principles and Practice (2nd edition), Rob J Hyndman and George Athanasopoulos, Monash University, Australia
+::::::
