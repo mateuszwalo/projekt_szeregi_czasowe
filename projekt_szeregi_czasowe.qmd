@@ -1,5 +1,5 @@
 ---
-title: "Projekt Szeregi Czasowe"
+title: "Projekt z Szeregów Czasowych"
 author: "Diana Morzhak, Mateusz Walo, Dominika Zydorczyk"
 format:
   html:
@@ -21,7 +21,7 @@ execute:
   echo: true        
   warning: false    
   message: false     
-  error: false        
+  error: false 
 editor: visual
 ---
 
@@ -59,6 +59,8 @@ library(randtests)   # runs.test
 library(moments)     # jarque.test
 library(changepoint) # changepoints
 library(strucchange) # testy stabilności
+
+knitr::opts_chunk$set(dev = "cairo_pdf")
 ```
 
 ## Przedstawienie danych wszystkich metali
